@@ -1541,8 +1541,12 @@ func _gallery_run() -> void:
 	for body in world.slot_bodies:
 		body.visible = false
 	world.camera_mode = "locked"
-	world.cam.fov = 40.0
-	for kind in Defs.CARD_ORDER:
+	world.cam.fov = 36.0
+	var kinds: Array[String] = []
+	for card in Defs.CARD_ORDER:
+		kinds.append(str(card))
+	kinds.append("heli")
+	for kind in kinds:
 		for c in world.unit_root.get_children():
 			c.free()
 		var node: Node3D = world.meshes.build(str(kind), false, "woodland")
@@ -1550,13 +1554,15 @@ func _gallery_run() -> void:
 		var pose: Dictionary = route.sample(48.0)
 		var spot: Vector3 = pose["pos"]
 		spot.y = world.road_height(48.0) + 0.05
-		if str(kind) == "escort":
-			spot.y += 6.0
+		if str(kind) == "escort" or str(kind) == "heli":
+			spot.y += 4.0
 		node.position = spot
 		world._face_along(node, pose["dir"], 0.0)
-		var eye: Vector3 = spot + pose["right"] * 4.4 + Vector3(0, 1.7, 0) - pose["dir"] * 3.6
+		var eye: Vector3 = spot + pose["right"] * 7.2 + Vector3(0, 2.6, 0) - pose["dir"] * 6.2
+		if str(kind) == "escort" or str(kind) == "heli":
+			eye += Vector3(0, 2.2, 0)
 		world.cam.global_position = eye
-		world.cam.look_at(spot + Vector3(0, 1.15, 0), Vector3.UP)
+		world.cam.look_at(spot + Vector3(0, 1.3, 0), Vector3.UP)
 		for _j in 3:
 			await get_tree().process_frame
 		await _capture_to(gallery_dir, "unit_%s" % kind)

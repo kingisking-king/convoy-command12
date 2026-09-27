@@ -89,7 +89,7 @@ func tank(root: Node3D, paint: String) -> void:
 	host._conform_forward(body)
 	var turret := Node3D.new()
 	turret.name = "turret"
-	turret.position = Vector3(0, 1.45, -0.15)
+	turret.position = Vector3(0, 1.22, -0.15)
 	root.add_child(turret)
 	var shell : SurfaceTool = host._surf()
 	host._hard.add_lathe(shell, PackedVector2Array([
