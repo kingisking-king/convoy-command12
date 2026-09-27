@@ -54,6 +54,61 @@ static func run() -> bool:
 				ok = false
 		bank += int(pay2["net"])
 
+	print("--- maps, facing, and new kit ---")
+	var seen := {}
+	for level in levels:
+		seen[str(level["biome"])] = true
+		if float(level["length"]) < 400.0:
+			print("FAIL short route %s" % level["name"])
+			ok = false
+	for need in ["desert", "forest", "mountain", "arctic", "urban", "jungle"]:
+		if not seen.has(need):
+			print("FAIL missing biome %s" % need)
+			ok = false
+	var urban: Dictionary = levels[4]
+	if int(urban.get("ieds", []).size()) < 2:
+		print("FAIL urban IEDs")
+		ok = false
+	var MeshLib = preload("res://scripts/mesh_lib.gd")
+	var lib = MeshLib.new()
+	for kind in Defs.CARD_ORDER:
+		var node: Node3D = lib.build(str(kind), false, "woodland")
+		var nose := node.find_child("nose", true, false) as Node3D
+		if nose == null:
+			print("FAIL %s has no nose" % kind)
+			ok = false
+			continue
+		var p := Vector3.ZERO
+		var walker: Node = nose
+		while walker is Node3D and walker != node:
+			p = (walker as Node3D).transform * p
+			walker = walker.get_parent()
+		if p.z > -0.4 or absf(p.x) > absf(p.z) * 0.45:
+			print("FAIL %s faces off axis x=%.2f z=%.2f" % [kind, p.x, p.z])
+			ok = false
+	var ied_level: Dictionary = levels[0].duplicate(true)
+	ied_level["ambushes"] = []
+	ied_level["length"] = 120.0
+	ied_level["ieds"] = [{"at": 40.0, "lat": 0.0}]
+	var bare = SimScript.new()
+	var ied_route = RouteScript.new(ied_level)
+	bare.start(ied_level, [Defs.make_unit("cargo", Defs.CENTER, 2)], ied_route, 3)
+	for _n in 180:
+		bare.tick(1.0 / 30.0)
+	if bare.friendlies[0]["hp"] >= float(bare.friendlies[0]["max_hp"]) - 5.0:
+		print("FAIL IED did not damage cargo")
+		ok = false
+	var cleared = SimScript.new()
+	cleared.start(ied_level, [Defs.make_unit("engineer", Defs.CENTER, 0), Defs.make_unit("cargo", Defs.CENTER, 3)], ied_route, 4)
+	for _n2 in 180:
+		cleared.tick(1.0 / 30.0)
+	if cleared.ieds.size() == 0 or bool(cleared.ieds[0]["live"]):
+		print("FAIL engineer did not clear IED")
+		ok = false
+	if cleared.friendlies[1]["hp"] < float(cleared.friendlies[1]["max_hp"]) - 5.0:
+		print("FAIL cargo took a cleared IED")
+		ok = false
+
 	print("--- grid formation holds lanes and upgrades scale ---")
 	var wedge: Array = Defs.arrange(["humvee", "apc", "cargo"], "wedge")
 	if wedge.size() != 3:

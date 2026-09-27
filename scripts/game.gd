@@ -17,6 +17,7 @@ const START_BANK := 500
 var phase: int = Phase.MENU
 var bank := START_BANK
 var level_index := 0
+var play_index := 0
 var campaign_done := false
 var formation: Array = []
 var selected_kind := "humvee"
@@ -36,6 +37,7 @@ var audio
 var shot_dir := ""
 var catalog_dir := ""
 var lands_dir := ""
+var gallery_dir := ""
 var manual_sim := false
 var mission_resolved := false
 var sim_acc := 0.0
@@ -82,6 +84,12 @@ func _ready() -> void:
 		get_viewport().msaa_3d = Viewport.MSAA_DISABLED
 		_enter_menu()
 		call_deferred("_lands_run")
+		return
+	if gallery_dir != "":
+		world.set_shadows(false)
+		get_viewport().msaa_3d = Viewport.MSAA_DISABLED
+		_enter_menu()
+		call_deferred("_gallery_run")
 		return
 	if sandbox_shot != "":
 		world.set_shadows(false)
@@ -171,6 +179,8 @@ func _connect_hud() -> void:
 	hud.preset_load.connect(_on_preset_load)
 	hud.preset_delete.connect(_on_preset_delete)
 	hud.sandbox_pressed.connect(_on_sandbox)
+	hud.missions_pressed.connect(_on_missions)
+	hud.mission_picked.connect(_on_mission_picked)
 	hud.sandbox_arm_pressed.connect(_on_sandbox_arm)
 	hud.sandbox_god_toggled.connect(_on_sandbox_god)
 	hud.sandbox_speed_changed.connect(_on_sandbox_speed)
@@ -189,12 +199,14 @@ func _on_play() -> void:
 	if campaign_done:
 		_on_restart()
 		return
+	play_index = level_index
 	_open_brief()
 
 
 func _on_restart() -> void:
 	bank = START_BANK
 	level_index = 0
+	play_index = 0
 	campaign_done = false
 	attempt = 0
 	_save()
@@ -229,6 +241,19 @@ func _on_back() -> void:
 
 func _budget() -> int:
 	return 999999 if sandbox else bank
+
+
+func _on_missions() -> void:
+	return_phase = Phase.MENU
+	phase = Phase.HELP
+	hud.show_missions(level_index, campaign_done)
+
+
+func _on_mission_picked(index: int) -> void:
+	if index > level_index and not campaign_done:
+		return
+	play_index = index
+	_open_brief()
 
 
 func _on_sandbox() -> void:
@@ -303,12 +328,13 @@ func _leave_sandbox() -> void:
 
 func _open_brief() -> void:
 	phase = Phase.BRIEF
-	var level: Dictionary = Defs.levels()[level_index]
+	play_index = clampi(play_index, 0, Defs.levels().size() - 1)
+	var level: Dictionary = Defs.levels()[play_index]
 	route = RouteScript.new(level)
 	world.show_level(level, route)
 	world.camera_mode = "build"
 	audio.set_music("music_menu")
-	hud.show_brief(level, level_index, Defs.levels().size(), bank)
+	hud.show_brief(level, play_index, Defs.levels().size(), bank)
 
 
 func _on_arm() -> void:
@@ -333,7 +359,7 @@ func _on_arm() -> void:
 func _active_level() -> Dictionary:
 	if sandbox and not sandbox_level.is_empty():
 		return sandbox_level
-	return Defs.levels()[level_index]
+	return Defs.levels()[play_index]
 
 
 func _refresh_build() -> void:
@@ -355,7 +381,7 @@ func _on_unit_selected(kind: String) -> void:
 
 
 func _on_quick() -> void:
-	formation = Defs.recommended(sandbox_map if sandbox else level_index, _budget())
+	formation = Defs.recommended(sandbox_map if sandbox else play_index, _budget())
 	selected_i = -1
 	audio.play("ui_place", -4.0)
 	_refresh_build()
@@ -377,6 +403,12 @@ func _build_input(event: InputEvent) -> void:
 			KEY_4: idx = 3
 			KEY_5: idx = 4
 			KEY_6: idx = 5
+			KEY_7: idx = 6
+			KEY_8: idx = 7
+			KEY_9: idx = 8
+			KEY_0: idx = 9
+			KEY_MINUS: idx = 10
+			KEY_EQUAL: idx = 11
 			KEY_Q:
 				_on_quick()
 				return
@@ -393,83 +425,106 @@ func _build_input(event: InputEvent) -> void:
 		if hud.hovering_ui():
 			return
 		var mb := event as InputEventMouseButton
-		var cell: Vector2i = world.pick_cell(mb.position)
+		var spot: Dictionary = _yard_at(mb.position)
 		if mb.pressed and mb.button_index == MOUSE_BUTTON_RIGHT:
-			_remove_at(cell)
+			_remove_near(spot)
 			return
 		if mb.button_index != MOUSE_BUTTON_LEFT:
 			return
 		if mb.pressed:
-			_press_cell(cell)
+			_press_yard(spot)
 		elif drag_index >= 0:
-			_drop_cell(cell)
+			_drop_yard(spot)
+
+
+func _yard_at(screen: Vector2) -> Dictionary:
+	var hit: Dictionary = world.pick_ground(screen)
+	if not bool(hit.get("ok", false)) or route == null:
+		return {"ok": false}
+	var proj: Dictionary = route.project(hit["pos"])
+	var along := float(proj["dist"])
+	var lateral := float(proj["lateral"])
+	if not Defs.in_yard(along, lateral):
+		return {"ok": false}
+	return {"ok": true, "along": along, "lateral": lateral}
 
 
 func _hover_cell(screen: Vector2) -> void:
-	var cell: Vector2i = world.pick_cell(screen)
-	var occupied: bool = Defs.index_at(formation, cell.x, cell.y) >= 0 if cell.x >= 0 else false
+	var spot: Dictionary = _yard_at(screen)
 	var ghost_kind := ""
-	var ok: bool = false
-	if drag_index >= 0 and drag_index < formation.size():
-		ghost_kind = str(formation[drag_index]["kind"])
-		ok = cell.x >= 0 and (not occupied or Defs.index_at(formation, cell.x, cell.y) == drag_index)
-	elif cell.x >= 0 and not occupied and selected_kind != "":
-		ghost_kind = selected_kind
-		ok = _can_add(selected_kind)
-	world.set_cell_hover(cell, "ok" if ok else ("bad" if cell.x >= 0 and not occupied else "none"))
-	world.set_ghost(ghost_kind, cell if not occupied or drag_index >= 0 else Vector2i(-1, -1), ok, camo)
+	var ok := false
+	var along := -1000.0
+	var lateral := 0.0
+	if bool(spot.get("ok", false)):
+		along = float(spot["along"])
+		lateral = float(spot["lateral"])
+		var near := Defs.nearest(formation, along, lateral, Defs.PLACE_GAP)
+		if drag_index >= 0 and drag_index < formation.size():
+			ghost_kind = str(formation[drag_index]["kind"])
+			ok = near < 0 or near == drag_index
+		elif near < 0 and selected_kind != "":
+			ghost_kind = selected_kind
+			ok = _can_add(selected_kind)
+		elif near >= 0:
+			ghost_kind = ""
+	world.set_ghost(ghost_kind, along, lateral, ok, camo)
 
 
-func _press_cell(cell: Vector2i) -> void:
-	if cell.x < 0:
+func _press_yard(spot: Dictionary) -> void:
+	if not bool(spot.get("ok", false)):
 		selected_i = -1
 		drag_index = -1
 		_refresh_build()
 		return
-	var idx := Defs.index_at(formation, cell.x, cell.y)
+	var along := float(spot["along"])
+	var lateral := float(spot["lateral"])
+	var idx := Defs.nearest(formation, along, lateral, Defs.PLACE_GAP)
 	if idx >= 0:
 		selected_i = idx
 		drag_index = idx
-		drag_from = cell
 		_refresh_build()
 		return
 	drag_index = -1
 	if selected_kind == "":
 		hud.toast("Pick a unit first.")
 		return
-	if formation.size() >= Defs.MAX_UNITS:
-		hud.toast("The formation is full.")
-		return
 	if not _can_add(selected_kind):
 		hud.toast("Not enough budget.")
 		return
-	formation.append(Defs.make_unit(selected_kind, cell.x, cell.y))
+	formation.append(Defs.make_free(selected_kind, along, lateral))
 	selected_i = formation.size() - 1
 	audio.play("ui_place", -3.0)
 	_refresh_build()
 
 
-func _drop_cell(cell: Vector2i) -> void:
+func _drop_yard(spot: Dictionary) -> void:
 	var idx := drag_index
 	drag_index = -1
 	if idx < 0 or idx >= formation.size():
 		return
-	if cell.x < 0 or cell == drag_from:
+	if not bool(spot.get("ok", false)):
 		_refresh_build()
 		return
-	var other := Defs.index_at(formation, cell.x, cell.y)
+	var along := float(spot["along"])
+	var lateral := float(spot["lateral"])
+	var other := Defs.nearest(formation, along, lateral, Defs.PLACE_GAP)
 	if other >= 0 and other != idx:
-		hud.toast("That cell is taken.")
+		hud.toast("Too close to another vehicle.")
 		_refresh_build()
 		return
-	formation[idx]["lane"] = cell.x
-	formation[idx]["row"] = cell.y
+	formation[idx]["along"] = along
+	formation[idx]["lateral"] = lateral
+	formation[idx]["free"] = true
+	formation[idx]["lane"] = -1
+	formation[idx]["row"] = -1
 	audio.play("ui_place", -6.0)
 	_refresh_build()
 
 
-func _remove_at(cell: Vector2i) -> void:
-	var idx := Defs.index_at(formation, cell.x, cell.y)
+func _remove_near(spot: Dictionary) -> void:
+	if not bool(spot.get("ok", false)):
+		return
+	var idx := Defs.nearest(formation, float(spot["along"]), float(spot["lateral"]), Defs.PLACE_GAP)
 	if idx < 0:
 		return
 	formation.remove_at(idx)
@@ -497,7 +552,10 @@ func _on_rotate() -> void:
 func _on_remove_selected() -> void:
 	if selected_i < 0 or selected_i >= formation.size():
 		return
-	_remove_at(Vector2i(int(formation[selected_i]["lane"]), int(formation[selected_i]["row"])))
+	formation.remove_at(selected_i)
+	selected_i = -1
+	audio.play("ui_click", -6.0, 0.8)
+	_refresh_build()
 
 
 func _on_arrange(style: String) -> void:
@@ -584,19 +642,28 @@ func _on_preset_load(preset_name: String) -> void:
 	for entry in parsed:
 		if typeof(entry) != TYPE_DICTIONARY:
 			continue
-		loaded.append(Defs.make_unit(
-			str(entry.get("kind", "")),
-			int(entry.get("lane", 0)),
-			int(entry.get("row", 0)),
-			int(entry.get("yaw", 0)),
-			int(entry.get("armor", 0)),
-			int(entry.get("weapon", 0)),
-			int(entry.get("speed", 0)),
-		))
+		if bool(entry.get("free", false)):
+			loaded.append(Defs.make_free(
+				str(entry.get("kind", "")),
+				float(entry.get("along", 0.0)),
+				float(entry.get("lateral", 0.0)),
+				int(entry.get("yaw", 0)),
+				int(entry.get("armor", 0)),
+				int(entry.get("weapon", 0)),
+				int(entry.get("speed", 0)),
+			))
+		else:
+			loaded.append(Defs.make_unit(
+				str(entry.get("kind", "")),
+				int(entry.get("lane", 0)),
+				int(entry.get("row", 0)),
+				int(entry.get("yaw", 0)),
+				int(entry.get("armor", 0)),
+				int(entry.get("weapon", 0)),
+				int(entry.get("speed", 0)),
+			))
 	if Defs.roster_cost(loaded) > _budget():
 		hud.toast("That preset costs more than the budget.")
-		return
-	if Defs.count_kind(loaded, "cargo") > 4:
 		return
 	formation = loaded
 	camo = str(cfg.get_value(preset_name, "camo", camo))
@@ -649,7 +716,7 @@ func _on_deploy() -> void:
 func _start_drive(roster: Array) -> void:
 	phase = Phase.DRIVE
 	mission_resolved = false
-	mission_level = sandbox_map if sandbox else level_index
+	mission_level = sandbox_map if sandbox else play_index
 	sim_acc = 0.0
 	var level: Dictionary = _active_level()
 	sim = SimScript.new()
@@ -785,7 +852,7 @@ func _finish(status: String) -> void:
 			"sandbox": true,
 		})
 		return
-	var level: Dictionary = Defs.levels()[level_index]
+	var level: Dictionary = Defs.levels()[mission_level]
 	var pay := Defs.payout(level, sim.delivered, sim.kills, column_cost) if won else {
 		"cost": column_cost, "salvage": 0, "base": 0, "cargo": 0, "kills": 0, "net": 0,
 	}
@@ -793,7 +860,7 @@ func _finish(status: String) -> void:
 		bank += int(pay["net"])
 	var grade := Defs.grade(won, sim.delivered, sim.cargo_total, sim.escorts_lost)
 	var last := won and mission_level >= Defs.levels().size() - 1
-	if won and not last:
+	if won and not last and mission_level >= level_index:
 		level_index = mission_level + 1
 		attempt = 0
 	elif last:
@@ -820,6 +887,7 @@ func _on_next() -> void:
 	if campaign_done or level_index >= Defs.levels().size():
 		_enter_menu()
 		return
+	play_index = level_index
 	_open_brief()
 
 
@@ -827,8 +895,7 @@ func _on_retry() -> void:
 	if sandbox:
 		_restart_sandbox_drive()
 		return
-	level_index = mission_level
-	campaign_done = false
+	play_index = mission_level
 	attempt += 1
 	_save()
 	_open_brief()
@@ -934,6 +1001,7 @@ func _load_save() -> void:
 	level_index = int(cfg.get_value("campaign", "level", 0))
 	campaign_done = bool(cfg.get_value("campaign", "done", false))
 	level_index = clampi(level_index, 0, Defs.levels().size() - 1)
+	play_index = level_index
 
 
 func _parse_args() -> void:
@@ -946,6 +1014,8 @@ func _parse_args() -> void:
 			catalog_dir = str(a).trim_prefix("--catalog=")
 		elif str(a).begins_with("--lands="):
 			lands_dir = str(a).trim_prefix("--lands=")
+		elif str(a).begins_with("--gallery="):
+			gallery_dir = str(a).trim_prefix("--gallery=")
 		elif str(a).begins_with("--sandboxshot="):
 			sandbox_shot = str(a).trim_prefix("--sandboxshot=")
 
@@ -1078,7 +1148,134 @@ func _lands_run() -> void:
 			var ground: float = world._height(eye.x, eye.z)
 			print("LAND %s %s eye_y=%.2f ground=%.2f clearance=%.2f" % [str(level["biome"]), station_names[s], eye.y, ground, eye.y - ground])
 			await _capture_to(lands_dir, "land_%s_%s" % [str(level["biome"]), station_names[s]])
+		if str(level["biome"]) != "mountain":
+			var mid: float = stations[1]
+			var back: Dictionary = built.sample(mid - 70.0)
+			var eye: Vector3 = back["pos"] + back["right"] * 18.0
+			eye.y = world.road_height(mid - 70.0) + 48.0
+			eye.y = maxf(eye.y, world._height(eye.x, eye.z) + 6.0)
+			world.camera_mode = "locked"
+			world.cam.global_position = eye
+			var look: Vector3 = built.sample(mid)["pos"]
+			look.y = world.road_height(mid) + 4.0
+			world.cam.look_at(look, Vector3.UP)
+			for _w in 4:
+				await get_tree().process_frame
+			await _capture_to(lands_dir, "land_%s_wide" % str(level["biome"]))
 	get_tree().quit(0)
+
+
+func _gallery_run() -> void:
+	hud.root.visible = false
+	var level: Dictionary = Defs.levels()[0]
+	route = RouteScript.new(level)
+	world.show_level(level, route)
+	for body in world.slot_bodies:
+		body.visible = false
+	world.camera_mode = "locked"
+	world.cam.fov = 40.0
+	for kind in Defs.CARD_ORDER:
+		for c in world.unit_root.get_children():
+			c.free()
+		var node: Node3D = world.meshes.build(str(kind), false, "woodland")
+		world.unit_root.add_child(node)
+		var pose: Dictionary = route.sample(48.0)
+		var spot: Vector3 = pose["pos"]
+		spot.y = world.road_height(48.0) + 0.05
+		if str(kind) == "escort":
+			spot.y += 6.0
+		node.position = spot
+		world._face_along(node, pose["dir"], 0.0)
+		var eye: Vector3 = spot + pose["right"] * 4.4 + Vector3(0, 1.7, 0) - pose["dir"] * 3.6
+		world.cam.global_position = eye
+		world.cam.look_at(spot + Vector3(0, 1.15, 0), Vector3.UP)
+		for _j in 3:
+			await get_tree().process_frame
+		await _capture_to(gallery_dir, "unit_%s" % kind)
+	for c2 in world.unit_root.get_children():
+		c2.free()
+	var column: Array[String] = []
+	for kind2 in Defs.CARD_ORDER:
+		column.append(str(kind2))
+	for i in column.size():
+		var unit: Node3D = world.meshes.build(column[i], false, "olive")
+		world.unit_root.add_child(unit)
+		var along := 70.0 - float(i) * 8.0
+		var lateral := -8.0 if i % 2 == 0 else 8.0
+		var pose2: Dictionary = route.sample(along)
+		var at: Vector3 = pose2["pos"] + pose2["right"] * lateral
+		at.y = world.road_height(along) + 0.05
+		if column[i] == "escort":
+			at.y += 13.0
+		unit.position = at
+		world._face_along(unit, pose2["dir"], 0.0)
+	var cam_pose: Dictionary = route.sample(28.0)
+	var cam_eye: Vector3 = cam_pose["pos"] + cam_pose["right"] * 16.0
+	cam_eye.y = world.road_height(28.0) + 10.0
+	world.cam.global_position = cam_eye
+	var cam_look: Vector3 = route.sample(62.0)["pos"]
+	cam_look.y = world.road_height(62.0) + 2.0
+	world.cam.look_at(cam_look, Vector3.UP)
+	for _k in 4:
+		await get_tree().process_frame
+	await _capture_to(gallery_dir, "convoy_drive")
+	_place_wide_formation("olive", 6.0)
+	for body in world.slot_bodies:
+		body.visible = true
+	var yard: Dictionary = route.sample(-16.0)
+	var yard_eye: Vector3 = yard["pos"] + yard["right"] * 2.0
+	yard_eye.y = world.road_height(-16.0) + 18.0
+	world.camera_mode = "locked"
+	world.cam.fov = 86.0
+	world.cam.global_position = yard_eye
+	var yard_look: Vector3 = route.sample(22.0)["pos"]
+	yard_look.y = world.road_height(22.0) + 1.0
+	world.cam.look_at(yard_look, Vector3.UP)
+	for _b in 4:
+		await get_tree().process_frame
+	await _capture_to(gallery_dir, "formation_build")
+	_place_wide_formation("olive", 210.0)
+	for body2 in world.slot_bodies:
+		body2.visible = false
+	var rear: Dictionary = route.sample(188.0)
+	var form_eye: Vector3 = rear["pos"] + rear["right"] * 2.0
+	form_eye.y = world.road_height(188.0) + 16.0
+	form_eye.y = maxf(form_eye.y, world._height(form_eye.x, form_eye.z) + 6.0)
+	world.camera_mode = "locked"
+	world.cam.fov = 86.0
+	world.cam.global_position = form_eye
+	var form_look: Vector3 = route.sample(228.0)["pos"]
+	form_look.y = world.road_height(228.0) + 1.2
+	world.cam.look_at(form_look, Vector3.UP)
+	for _d in 4:
+		await get_tree().process_frame
+	await _capture_to(gallery_dir, "formation_drive")
+	world.cam.fov = 58.0
+	get_tree().quit(0)
+
+
+func _place_wide_formation(camo: String, along0: float) -> void:
+	for c in world.unit_root.get_children():
+		c.free()
+	var kinds: Array[String] = []
+	for kind in Defs.CARD_ORDER:
+		kinds.append(str(kind))
+	var cols: Array[float] = [-32.0, -16.0, 0.0, 16.0, 32.0]
+	var rows: Array[float] = [0.0, 16.0, 32.0]
+	var n := 0
+	for row in rows:
+		for lat in cols:
+			var kind_name: String = kinds[n % kinds.size()]
+			n += 1
+			var unit: Node3D = world.meshes.build(kind_name, false, camo)
+			world.unit_root.add_child(unit)
+			var along := along0 + row
+			var pose: Dictionary = world.pose_at(along, lat, 0)
+			var at: Vector3 = pose["pos"]
+			if kind_name == "escort":
+				at.y += 13.0
+			unit.position = at
+			world._face_along(unit, pose["dir"], float(pose["pitch"]))
 
 
 func _catalog_run() -> void:

@@ -10,6 +10,14 @@ var _tex := {}
 var _mats := {}
 var _atlas := {}
 var _wheel_i := 0
+var _mil = null
+
+
+func _vehicles():
+	if _mil == null:
+		_mil = preload("res://scripts/mil_vehicles.gd").new()
+		_mil.host = self
+	return _mil
 
 
 func build(kind: String, enemy: bool = false, camo_name: String = "") -> Node3D:
@@ -19,29 +27,35 @@ func build(kind: String, enemy: bool = false, camo_name: String = "") -> Node3D:
 	var root := Node3D.new()
 	root.name = kind
 	var paint := "hostile" if enemy else scheme
+	var mil = _vehicles()
 	match kind:
 		"cargo":
-			_kenney(root, "res://assets/cc0/vehicles/delivery.glb", 1.62, paint, enemy)
-			_flag(root, Vector3(0, 2.55, 0.2))
+			mil.cargo(root, paint)
+			_flag(root, Vector3(0, 2.7, 0.4))
 		"humvee":
-			_kenney(root, "res://assets/cc0/vehicles/suv.glb", 1.85, paint, enemy)
-			_gun_turret(root, Vector3(0, 2.05, 0.15), 1.15, 0.045, paint)
-		"apc":
-			_quaternius(root, "res://assets/cc0/military/Tank2.fbx", 0.28)
+			mil.humvee(root, paint)
+		"mrap":
+			mil.mrap(root, paint)
+		"apc", "ifv":
+			mil.apc(root, paint)
 		"tank":
-			_quaternius(root, "res://assets/cc0/military/Tank.fbx", 0.3)
-		"aa":
-			_quaternius(root, "res://assets/cc0/military/Tank3.fbx", 0.28)
+			mil.tank(root, paint)
+		"aa", "spaa":
+			mil.aa(root, paint)
+		"mortar", "bombard":
+			mil.mortar(root, paint)
 		"repair":
-			_kenney(root, "res://assets/cc0/vehicles/van.glb", 1.7, paint, enemy)
-			_repair_kit(root)
+			mil.repair(root, paint)
+		"fuel":
+			mil.fuel(root, paint)
+		"engineer":
+			mil.engineer(root, paint)
+		"medic":
+			mil.medic(root, paint)
+		"escort":
+			mil.heli(root, paint)
 		"technical":
-			_kenney(root, "res://assets/cc0/vehicles/truck-flat.glb", 1.75, "hostile", true)
-			_gun_turret(root, Vector3(0, 1.7, 0.55), 1.05, 0.04, "hostile")
-			var crew := _person(true, false)
-			crew.position = Vector3(0.15, 1.15, 0.35)
-			crew.scale = Vector3.ONE * 0.72
-			root.add_child(crew)
+			mil.technical(root, paint)
 		"infantry":
 			root.add_child(_person(enemy, false))
 		"rpg":
@@ -51,16 +65,16 @@ func build(kind: String, enemy: bool = false, camo_name: String = "") -> Node3D:
 			var b := _person(enemy, false)
 			b.position = Vector3(0.5, 0, -0.2)
 			root.add_child(b)
-			_muzzle(root, Vector3(-0.2, 1.45, -0.7))
+			_muzzle(root, Vector3(0, 1.2, -0.8))
 		"heli":
-			_heli(root)
+			mil.heli(root, "hostile" if enemy else paint)
 		_:
-			_kenney(root, "res://assets/cc0/vehicles/truck.glb", 1.6, paint, enemy)
-	if kind != "infantry" and kind != "rpg" and kind != "heli":
-		_dust(root, 2.1)
-	if kind == "heli":
+			mil.cargo(root, paint)
+	if kind != "infantry" and kind != "rpg" and kind != "heli" and kind != "escort":
+		_dust(root, 2.4)
+	if kind == "heli" or kind == "escort":
 		_wash(root)
-	_blob(root, 2.2 if kind == "tank" or kind == "heli" else 1.6)
+	_blob(root, 2.4 if kind == "tank" or kind == "heli" or kind == "escort" else 1.7)
 	return root
 
 
@@ -101,6 +115,10 @@ func prop(kind: String) -> Node3D:
 	match kind:
 		"pine":
 			path = "res://assets/cc0/nature/tree_pineDefaultA.glb"
+		"pine_b":
+			path = "res://assets/cc0/nature/tree_pineDefaultB.glb"
+		"shrub", "bush", "log":
+			return _simple_prop(kind)
 		"oak":
 			path = "res://assets/cc0/nature/tree_oak.glb"
 		"palm":
@@ -116,6 +134,36 @@ func prop(kind: String) -> Node3D:
 	var root := _instantiate(path)
 	root.name = kind
 	_fix_nature(root)
+	return root
+
+
+func _simple_prop(kind: String) -> Node3D:
+	var root := Node3D.new()
+	root.name = kind
+	if kind == "log":
+		var log := MeshInstance3D.new()
+		var cyl := CylinderMesh.new()
+		cyl.top_radius = 0.28
+		cyl.bottom_radius = 0.36
+		cyl.height = 4.4
+		log.mesh = cyl
+		log.rotation_degrees = Vector3(0, 0, 90)
+		log.position = Vector3(0, 0.32, 0)
+		log.material_override = mat(Color(0.38, 0.26, 0.14))
+		root.add_child(log)
+		return root
+	var dry := kind == "shrub"
+	var spots: Array[Vector3] = [Vector3(0, 0.35, 0), Vector3(0.38, 0.22, 0.12), Vector3(-0.28, 0.18, -0.2)]
+	var radii: Array[float] = [0.46, 0.28, 0.22]
+	for i in spots.size():
+		var ball := MeshInstance3D.new()
+		var sphere := SphereMesh.new()
+		sphere.radius = radii[i]
+		sphere.height = radii[i] * 1.5
+		ball.mesh = sphere
+		ball.position = spots[i]
+		ball.material_override = mat(Color(0.5, 0.42, 0.2) if dry else Color(0.18, 0.4, 0.12))
+		root.add_child(ball)
 	return root
 
 
@@ -348,11 +396,18 @@ func _person(enemy: bool, rpg: bool) -> Node3D:
 	var root := Node3D.new()
 	root.name = "soldier"
 	var holder := Node3D.new()
-	holder.rotation_degrees = Vector3(0, 180, 0)
 	holder.scale = Vector3.ONE * 2.2
 	var inst := _instantiate("res://assets/cc0/characters/character-male-c.glb" if not rpg else "res://assets/cc0/characters/character-male-e.glb")
+	if inst == null:
+		root.add_child(holder)
+		return root
 	holder.add_child(inst)
+	var nose := Marker3D.new()
+	nose.name = "nose"
+	nose.position = Vector3(0, 0.72, 0.22)
+	holder.add_child(nose)
 	root.add_child(holder)
+	_conform_forward(holder)
 	_pose_arms(inst)
 	_tint_soldier(inst, enemy)
 	var gun := Node3D.new()
@@ -437,6 +492,27 @@ func _road_wheel(parent: Node3D, pos: Vector3) -> void:
 	_hard.add_cylinder(hub, 0.07, 0.18, Vector3.ZERO, Vector3(0, 0, 90), 10)
 	_commit(pivot, hub, "metal")
 	parent.add_child(pivot)
+
+
+func _conform_forward(holder: Node3D) -> void:
+	# One convention: the nose marker ends on the holder's local -Z, which is forward.
+	var nose := holder.get_node_or_null("nose") as Node3D
+	if nose == null:
+		return
+	var p := Vector3.ZERO
+	var node: Node = nose
+	while node is Node3D and node != holder:
+		p = (node as Node3D).transform * p
+		node = node.get_parent()
+	var best_yaw := 0.0
+	var best_z := 1.0e9
+	for i in 8:
+		var yaw := float(i) * TAU / 8.0
+		var turned: Vector3 = Basis(Vector3.UP, yaw) * p
+		if turned.z < best_z - 0.0001:
+			best_z = turned.z
+			best_yaw = yaw
+	holder.basis = Basis(Vector3.UP, best_yaw)
 
 
 func _muzzle(parent: Node3D, pos: Vector3) -> void:
@@ -720,17 +796,21 @@ func _mat(key: String) -> Material:
 		m.metallic = 0.05
 	elif key == "metal":
 		m.albedo_color = Color("8d9490")
-		m.metallic = 0.72
-		m.roughness = 0.38
+		m.metallic = 0.55
+		m.roughness = 0.46
+	elif key == "mud":
+		m.albedo_color = Color(0.24, 0.17, 0.1)
+		m.roughness = 0.98
+		m.metallic = 0.0
 	else:
 		var pal := _palette(key if key == "hostile" else scheme)
 		m.albedo_texture = _camo_texture(pal)
-		m.albedo_color = Color(0.78, 0.76, 0.7)
+		m.albedo_color = Color(0.62, 0.6, 0.54)
 		m.uv1_triplanar = true
 		m.uv1_world_triplanar = true
-		m.uv1_scale = Vector3(0.42, 0.42, 0.42)
-		m.roughness = 0.86
-		m.metallic = 0.04
+		m.uv1_scale = Vector3(0.55, 0.55, 0.55)
+		m.roughness = 0.92
+		m.metallic = 0.03
 	_mats[key + scheme] = m
 	return m
 

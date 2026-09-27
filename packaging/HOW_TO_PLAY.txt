@@ -6,11 +6,12 @@ Lose if every cargo truck is destroyed.
 Pay from a win is added to your war chest for the next mission.
 
 BUILD
-  The start of the road is a grid, five lanes wide and eight rows deep.
-  The formation keeps that shape while it drives.
-  1-6        select Cargo, Humvee, APC, Tank, Anti-Air, Repair
-  Left click an empty cell to place the selected unit
-  Left click a vehicle, then drag it to another cell
+  Place vehicles anywhere in the yard at the start of the road.
+  There is no lane cap. The column keeps that spacing as it drives.
+  1-9, 0, - and = select the unit cards
+  Left click empty ground to place the selected unit
+  Left click a vehicle, then drag it
+  Missions unlock in order. Sandbox can use any map.
   Right click remove
   R          rotate the selected vehicle
   Q          suggested wedge

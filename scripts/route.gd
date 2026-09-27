@@ -32,6 +32,21 @@ func _build(level: Dictionary) -> void:
 		elif style == "forest":
 			heading += rng.randf_range(-0.38, 0.38)
 			heading = clampf(heading, -1.05, 1.05)
+		elif style == "jungle":
+			heading += rng.randf_range(-0.34, 0.34)
+			heading = clampf(heading, -0.95, 0.95)
+		elif style == "urban":
+			step = 12.0
+			heading += rng.randf_range(-0.55, 0.55)
+			heading = clampf(heading, -0.85, 0.85)
+		elif style == "arctic":
+			var lake := traveled > 180.0 and traveled < 340.0
+			if lake:
+				heading = lerpf(heading, 0.05, 0.35)
+			else:
+				heading += rng.randf_range(-0.16, 0.16)
+				heading *= 0.9
+			heading = clampf(heading, -0.55, 0.55)
 		else:
 			heading += rng.randf_range(-0.2, 0.2)
 			heading *= 0.92
@@ -40,6 +55,7 @@ func _build(level: Dictionary) -> void:
 		pos += dir * step
 		pts.push_back(pos)
 		traveled += step
+		step = 16.0
 
 
 func _measure() -> void:

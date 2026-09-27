@@ -29,7 +29,7 @@ Download `ConvoyCommand-Windows-x64.zip` from the GitHub release (or from the pu
 
 ### Build phase
 
-An angled camera looks down a five-lane grid at the start of the route. Place vehicles in any cell. The formation keeps that shape while it drives.
+An angled camera looks down a wide yard at the start of the route. Place vehicles anywhere in that yard. The formation keeps that shape while it drives.
 
 - **1–6** select Cargo, Humvee, APC, Tank, Anti-Air, or Repair
 - **Left click** an empty cell to place the selected unit
