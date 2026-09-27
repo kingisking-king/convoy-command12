@@ -27,12 +27,11 @@ func build(kind: String, enemy: bool = false, camo_name: String = "") -> Node3D:
 			_kenney(root, "res://assets/cc0/vehicles/suv.glb", 1.85, paint, enemy)
 			_gun_turret(root, Vector3(0, 2.05, 0.15), 1.15, 0.045, paint)
 		"apc":
-			_apc(root, paint)
+			_quaternius(root, "res://assets/cc0/military/Tank2.fbx", 0.28)
 		"tank":
-			_tank(root, paint)
+			_quaternius(root, "res://assets/cc0/military/Tank.fbx", 0.3)
 		"aa":
-			_kenney(root, "res://assets/cc0/vehicles/truck.glb", 1.7, paint, enemy)
-			_aa_mount(root, paint)
+			_quaternius(root, "res://assets/cc0/military/Tank3.fbx", 0.28)
 		"repair":
 			_kenney(root, "res://assets/cc0/vehicles/van.glb", 1.7, paint, enemy)
 			_repair_kit(root)
@@ -118,6 +117,51 @@ func prop(kind: String) -> Node3D:
 	root.name = kind
 	_fix_nature(root)
 	return root
+
+
+func _quaternius(root: Node3D, path: String, scale: float) -> void:
+	var holder := Node3D.new()
+	holder.name = "body"
+	holder.rotation_degrees = Vector3(0, 180, 0)
+	holder.scale = Vector3.ONE * scale
+	var inst := _instantiate(path)
+	if inst == null:
+		root.add_child(holder)
+		return
+	holder.add_child(inst)
+	root.add_child(holder)
+	_keep_model_materials(inst)
+	var turret := Node3D.new()
+	turret.name = "turret"
+	turret.position = Vector3(0, 1.5, -0.2)
+	root.add_child(turret)
+	_muzzle(turret, Vector3(0, 0.35, -1.8))
+
+
+func _keep_model_materials(node: Node) -> void:
+	for mi in node.find_children("*", "MeshInstance3D", true, false):
+		var mesh_inst := mi as MeshInstance3D
+		if mesh_inst == null or mesh_inst.mesh == null:
+			continue
+		for s in mesh_inst.mesh.get_surface_count():
+			var src := mesh_inst.mesh.surface_get_material(s)
+			var dup: StandardMaterial3D
+			if src is StandardMaterial3D:
+				dup = (src as StandardMaterial3D).duplicate() as StandardMaterial3D
+			else:
+				dup = StandardMaterial3D.new()
+				dup.albedo_color = Color(0.34, 0.38, 0.24)
+			var arrays: Array = mesh_inst.mesh.surface_get_arrays(s)
+			var raw = arrays[Mesh.ARRAY_COLOR]
+			var has_color := raw is PackedColorArray and (raw as PackedColorArray).size() > 0
+			dup.vertex_color_use_as_albedo = has_color
+			if dup.albedo_texture == null and not dup.vertex_color_use_as_albedo:
+				dup.albedo_color = Color(0.36, 0.4, 0.24)
+			elif dup.albedo_texture == null and dup.albedo_color.r > 0.75 and dup.albedo_color.g > 0.75 and dup.albedo_color.b > 0.7:
+				dup.albedo_color = Color(0.72, 0.74, 0.62)
+			dup.roughness = clampf(dup.roughness, 0.62, 0.92)
+			dup.metallic = minf(dup.metallic, 0.15)
+			mesh_inst.set_surface_override_material(s, dup)
 
 
 func _kenney(root: Node3D, path: String, scale: float, paint: String, enemy: bool) -> void:
@@ -467,8 +511,13 @@ func _blob(parent: Node3D, radius: float) -> void:
 
 func _instantiate(path: String) -> Node3D:
 	if not _packed.has(path):
-		_packed[path] = load(path)
+		var res = load(path)
+		if res == null:
+			return null
+		_packed[path] = res
 	var packed: PackedScene = _packed[path]
+	if packed == null:
+		return null
 	return packed.instantiate() as Node3D
 
 
@@ -508,7 +557,11 @@ func _military_atlas(paint: String) -> Texture2D:
 	if _atlas.has(paint):
 		return _atlas[paint]
 	var src := Image.new()
-	var err := src.load("res://assets/cc0/vehicles/Textures/colormap.png")
+	var err := ERR_FILE_NOT_FOUND
+	var loaded := load("res://assets/cc0/vehicles/Textures/colormap.png")
+	if loaded is Texture2D:
+		src = (loaded as Texture2D).get_image()
+		err = OK if src != null else ERR_FILE_NOT_FOUND
 	var out := Image.create(8, 8, false, Image.FORMAT_RGB8)
 	if err != OK:
 		var flat: Color = _tones(paint)[0]
@@ -532,10 +585,9 @@ func _military_atlas(paint: String) -> Texture2D:
 					var g := 0.62 + luma * 0.3
 					out.set_pixel(x, y, Color(0.12 * g, 0.22 * g, 0.32 * g))
 				else:
-					var bucket := int(c.r * 5.0) + int(c.g * 5.0) * 3 + int(c.b * 5.0) * 7
-					var tone: Color = tones[posmod(bucket, tones.size())] as Color
-					var n := 0.9 + _pix_noise(x, y) * 0.16
-					var shade := clampf((0.76 + luma * 0.3) * n, 0.55, 1.02)
+					var tone: Color = tones[0].lerp(tones[1], clampf(1.0 - luma, 0.0, 1.0))
+					tone = tone.lerp(tones[2], _pix_noise(x >> 2, y >> 2) * 0.45)
+					var shade := clampf(0.42 + luma * 0.85, 0.35, 1.2)
 					out.set_pixel(x, y, Color(tone.r * shade, tone.g * shade, tone.b * shade))
 	var tex := ImageTexture.create_from_image(out)
 	_atlas[paint] = tex
@@ -575,15 +627,15 @@ func _fix_nature(node: Node) -> void:
 func _nature_color(mat_name: String, albedo: Color) -> Color:
 	var n := mat_name.to_lower()
 	if n.find("leaf") >= 0:
-		return Color(0.16, 0.42, 0.14)
+		return Color(0.09, 0.3, 0.07)
 	if n.find("grass") >= 0:
-		return Color(0.26, 0.46, 0.16)
+		return Color(0.16, 0.38, 0.1)
 	if n.find("wood") >= 0 or n.find("bark") >= 0:
 		return Color(0.34, 0.22, 0.13)
 	if n.find("dirt") >= 0:
 		return Color(0.4, 0.3, 0.18)
 	if albedo.g > 0.55 and albedo.b > 0.45 and albedo.r < 0.45:
-		return Color(0.16, 0.42, 0.14)
+		return Color(0.09, 0.3, 0.07)
 	if albedo.r > 0.7 and albedo.g > 0.35 and albedo.b < 0.55:
 		return Color(0.4, 0.3, 0.18)
 	return Color(0.44, 0.42, 0.39)

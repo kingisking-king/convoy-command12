@@ -1,0 +1,7 @@
+Quaternius Animated Tanks Pack
+https://quaternius.com/packs/animatedtanks.html
+
+License: CC0 1.0 Universal
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Tank.fbx, Tank2.fbx, and Tank3.fbx are used for the tank, APC, and anti-air units.

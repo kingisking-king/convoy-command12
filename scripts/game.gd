@@ -1028,6 +1028,8 @@ func _sandbox_shot_run() -> void:
 
 func _lands_run() -> void:
 	hud.root.visible = false
+	if world.menu_root:
+		world.menu_root.visible = false
 	for _i in 4:
 		await get_tree().process_frame
 	for level in Defs.levels():
@@ -1053,9 +1055,9 @@ func _lands_run() -> void:
 			world._face_along(unit, face, world._grade_pitch(along))
 		var sm: Dictionary = built.sample(dist)
 		world.camera_mode = "drive"
-		world.yaw = 0.42
-		world.pitch = 0.4
-		world.dist = 36.0
+		world.yaw = 0.22
+		world.pitch = 0.28
+		world.dist = 44.0
 		world.cam_ready = false
 		world.focus = sm["pos"]
 		world.focus.y = world.road_height(dist)
@@ -1068,6 +1070,8 @@ func _lands_run() -> void:
 
 
 func _catalog_run() -> void:
+	hud.root.visible = false
+	world.camera_mode = "locked"
 	for _i in 4:
 		await get_tree().process_frame
 	world.meshes.scheme = "desert"
@@ -1075,31 +1079,52 @@ func _catalog_run() -> void:
 		world.menu_root.visible = false
 	var stage := MeshInstance3D.new()
 	var disc := CylinderMesh.new()
-	disc.top_radius = 14.0
-	disc.bottom_radius = 14.0
-	disc.height = 0.3
+	disc.top_radius = 8.0
+	disc.bottom_radius = 8.0
+	disc.height = 0.2
 	stage.mesh = disc
-	stage.position = Vector3(0, -0.16, 0)
-	stage.material_override = world.meshes.mat(Color(0.45, 0.36, 0.22))
+	stage.position = Vector3(0, -0.12, 0)
+	stage.material_override = world.meshes.mat(Color(0.42, 0.34, 0.22))
 	world.add_child(stage)
-	var kinds: Array = ["cargo", "humvee", "apc", "tank", "aa", "repair", "technical", "infantry", "rpg", "heli"]
+	var kinds: Array = ["cargo", "humvee", "tank", "heli"]
 	for kind in kinds:
-		var enemy: bool = kind == "technical" or kind == "infantry" or kind == "rpg" or kind == "heli"
-		var node: Node3D = world.meshes.build(str(kind), enemy, "desert" if not enemy else "")
+		var enemy: bool = kind == "heli"
+		var node: Node3D = world.meshes.build(str(kind), enemy, "olive" if kind != "cargo" and kind != "humvee" else "desert")
 		world.add_child(node)
-		node.position = Vector3(0, 0.0 if kind != "heli" else 1.4, 0)
-		node.rotation_degrees = Vector3(0, 28, 0)
-		var focus := Vector3(0, 1.15, 0)
-		var dist := 7.5
-		if kind == "infantry" or kind == "rpg":
-			dist = 3.4
-			focus = Vector3(0, 1.0, 0)
-		elif kind == "heli":
-			dist = 8.5
-			focus = Vector3(0, 1.6, 0)
-		elif kind == "tank":
-			dist = 8.2
-		world.cam.global_position = focus + Vector3(dist * 0.72, dist * 0.38, dist * 0.62)
+		node.position = Vector3.ZERO
+		node.rotation_degrees = Vector3(0, -38, 0)
+		for _j in 2:
+			await get_tree().process_frame
+		var mn := Vector3(1.0e9, 1.0e9, 1.0e9)
+		var mx := Vector3(-1.0e9, -1.0e9, -1.0e9)
+		for mi in node.find_children("*", "MeshInstance3D", true, false):
+			var inst := mi as MeshInstance3D
+			if inst == null or inst.mesh == null or str(inst.name) == "blob":
+				continue
+			var ab: AABB = inst.mesh.get_aabb()
+			var xf := inst.transform
+			var parent: Node = inst.get_parent()
+			while parent is Node3D and parent != node:
+				xf = (parent as Node3D).transform * xf
+				parent = parent.get_parent()
+			var corners: Array[Vector3] = [
+				Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1),
+				Vector3(1, 1, 0), Vector3(1, 0, 1), Vector3(0, 1, 1), Vector3(1, 1, 1),
+			]
+			for corner in corners:
+				var point: Vector3 = xf * (ab.position + Vector3(ab.size.x * corner.x, ab.size.y * corner.y, ab.size.z * corner.z))
+				mn.x = minf(mn.x, point.x)
+				mn.y = minf(mn.y, point.y)
+				mn.z = minf(mn.z, point.z)
+				mx.x = maxf(mx.x, point.x)
+				mx.y = maxf(mx.y, point.y)
+				mx.z = maxf(mx.z, point.z)
+		var span := maxf((mx - mn).length(), 1.5)
+		world.cam.fov = 34.0
+		var dist := span * (0.42 if str(kind) == "heli" else 0.62)
+		var focus := (mn + mx) * 0.5
+		focus.y += (mx.y - mn.y) * 0.06
+		world.cam.global_position = focus + Vector3(dist * 0.78, dist * 0.28, dist * 0.62)
 		world.cam.look_at(focus, Vector3.UP)
 		for _j in 2:
 			await get_tree().process_frame
