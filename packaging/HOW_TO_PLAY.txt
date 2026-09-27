@@ -1,0 +1,29 @@
+CONVOY COMMAND
+Double-click ConvoyCommand.exe. No install.
+
+Win a mission by getting at least one cargo truck to the drop.
+Lose if every cargo truck is destroyed.
+Pay from a win is added to your war chest for the next mission.
+
+BUILD
+  1-6        select Cargo, Humvee, APC, Tank, Anti-Air, Repair
+  Left click place on a numbered pad (1 is the front)
+  Right click remove
+  Q          suggested column
+  Enter      deploy
+  Right-drag orbit, wheel zoom, F reset camera
+  A/D orbit, W/S zoom
+
+Bring at least one cargo truck. Keep escorts beside it.
+Anti-air is for helicopters. Do not lead with cargo.
+
+DRIVE
+  Guns fire automatically.
+  Q smoke     enemies miss more
+  E airstrike hits hostiles only
+  R field repair
+  Esc pause
+  Right-drag orbit, wheel zoom, F recenter
+  F11 fullscreen, M mute
+
+Yellow on the map is cargo. Red is hostile.
