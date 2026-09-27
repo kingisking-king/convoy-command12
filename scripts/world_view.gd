@@ -1807,8 +1807,17 @@ func _blend_color(p: Vector3, slope: float) -> Color:
 		var shade_d := 0.9 + _hash2(int(floor(p.x * 0.4)), int(floor(p.z * 0.4))) * 0.16
 		return Color(col.r * shade_d, col.g * shade_d, col.b * shade_d)
 	elif biome == "forest":
-		col = grass_dark.lerp(grass, 0.35 + patch * 0.65)
-		col = col.lerp(dirt, clampf((0.45 - patch) * 0.9, 0.0, 0.55))
+		var needle := Color(0.32, 0.22, 0.1)
+		var moss := Color(0.14, 0.26, 0.09)
+		var loam := Color(0.36, 0.24, 0.12)
+		col = grass_dark.lerp(grass, 0.2 + patch * 0.8)
+		var blot := _hash2(int(floor(p.x * 0.07)), int(floor(p.z * 0.07)))
+		if blot > 0.72:
+			col = col.lerp(needle, 0.72)
+		elif blot > 0.55:
+			col = col.lerp(loam, 0.48)
+		elif blot < 0.22:
+			col = col.lerp(moss, 0.55)
 		if slope > 0.3:
 			col = col.lerp(dirt, clampf((slope - 0.3) * 1.2, 0.0, 0.65))
 		if slope > 0.6:
@@ -1816,11 +1825,11 @@ func _blend_color(p: Vector3, slope: float) -> Color:
 		var proj_f: Dictionary = route.project(Vector3(p.x, 0.0, p.z)) if route != null else {}
 		if not proj_f.is_empty():
 			var lat_f := absf(float(proj_f["lateral"]))
-			if lat_f < 13.0:
-				col = col.lerp(Color(0.4, 0.29, 0.16), 1.0 - smoothstep(5.5, 13.0, lat_f))
+			if lat_f < 14.0:
+				col = col.lerp(Color(0.42, 0.28, 0.14), 1.0 - smoothstep(5.2, 14.0, lat_f))
 			if _stream_depth(float(proj_f["dist"]), float(proj_f["lateral"])) > 0.7:
 				col = Color(0.24, 0.2, 0.12)
-		var shade_f := 0.86 + _hash2(int(floor(p.x * 0.45)), int(floor(p.z * 0.45))) * 0.22
+		var shade_f := 0.78 + _hash2(int(floor(p.x * 0.45)), int(floor(p.z * 0.45))) * 0.36
 		return Color(col.r * shade_f, col.g * shade_f, col.b * shade_f)
 	elif biome == "arctic":
 		var snow_c := Color(0.86, 0.9, 0.94)
@@ -1952,7 +1961,25 @@ func _desert_grain() -> Texture2D:
 func _forest_grain() -> Texture2D:
 	if forest_grain != null:
 		return forest_grain
-	forest_grain = _make_grain(Color(0.82, 0.95, 0.78))
+	var size := 128
+	var img := Image.create(size, size, false, Image.FORMAT_RGB8)
+	for y in size:
+		for x in size:
+			var mid := _hash2(x >> 2, y >> 2)
+			var fine := _hash2(x * 3 + 2, y * 5 + 7)
+			var patch := _hash2(x >> 4, y >> 4)
+			var tint := Color(0.55, 0.72, 0.38)
+			if patch > 0.68:
+				tint = Color(0.45, 0.32, 0.16)
+			elif patch < 0.22:
+				tint = Color(0.22, 0.16, 0.09)
+			elif patch < 0.38:
+				tint = Color(0.28, 0.4, 0.16)
+			var v := 0.72 + mid * 0.22 + fine * 0.1
+			if absf(fine - mid) < 0.035:
+				v = 0.48
+			img.set_pixel(x, y, Color(v * tint.r, v * tint.g, v * tint.b))
+	forest_grain = ImageTexture.create_from_image(img)
 	return forest_grain
 
 
@@ -2151,6 +2178,16 @@ func _build_road() -> void:
 				asphalt = Color(0.14, 0.14, 0.13).lerp(Color(0.22, 0.21, 0.2), n)
 			_flat(st, prev_l, prev_r, r, l, shoulder)
 			_flat(st, prev_al, prev_ar, ar, al, asphalt)
+			if biome == "urban":
+				var walk := Color(0.52, 0.5, 0.46).lerp(Color(0.38, 0.36, 0.33), n)
+				var prev_sm_w: Dictionary = prev["sm"]
+				var py_w: float = float(prev["y"])
+				for edge in [-1.0, 1.0]:
+					var sl0 := _road_pt(prev_sm_w, edge * 6.4, py_w + 0.28)
+					var sr0 := _road_pt(prev_sm_w, edge * 9.4, py_w + 0.28)
+					var sl1 := _road_pt(sm, edge * 6.4, y + 0.28)
+					var sr1 := _road_pt(sm, edge * 9.4, y + 0.28)
+					_flat(dash, sl0, sr0, sr1, sl1, walk)
 			var prev_sm_e: Dictionary = prev["sm"]
 			var py_e: float = float(prev["y"])
 			if paint_lines:
@@ -2271,12 +2308,27 @@ func _build_props(seed: int) -> void:
 	var dist := 8.0
 	while dist < route.total - 8.0:
 		for side in [-1.0, 1.0]:
+			if biome == "urban":
+				continue
 			var lat_lo := 13.0
 			var lat_hi := 40.0
+			var copies := 1
 			if biome == "mountain":
 				lat_lo = 13.0
 				lat_hi = 30.0
+			elif biome == "forest":
+				lat_lo = 7.6
+				lat_hi = 18.0
+				copies = 3
 			var lat: float = float(side) * rng.randf_range(lat_lo, lat_hi)
+			if biome == "forest" and copies > 1:
+				var band := int(posmod(dist + float(side) * 3.0, 3.0))
+				if band == 0:
+					lat = float(side) * rng.randf_range(7.6, 11.0)
+				elif band == 1:
+					lat = float(side) * rng.randf_range(12.0, 20.0)
+				else:
+					lat = float(side) * rng.randf_range(22.0, 38.0)
 			var sm: Dictionary = route.sample(dist)
 			var pos: Vector3 = sm["pos"] + sm["right"] * lat
 			var y := _height(pos.x, pos.z)
@@ -2290,20 +2342,33 @@ func _build_props(seed: int) -> void:
 			var s := rng.randf_range(1.4, 2.4)
 			if biome == "forest" or biome == "jungle":
 				var roll_f := rng.randf()
-				if biome == "jungle" and roll_f > 0.45:
+				if biome == "forest":
+					if roll_f > 0.9:
+						kind = "bush"
+						s = rng.randf_range(0.8, 1.6)
+					elif roll_f > 0.82:
+						kind = "log"
+						s = rng.randf_range(0.7, 1.3)
+					elif roll_f > 0.74:
+						kind = "rock"
+						s = rng.randf_range(0.6, 1.5)
+					elif roll_f > 0.4:
+						kind = "pine_b"
+						s = rng.randf_range(1.8, 3.6)
+					else:
+						kind = "pine"
+						s = rng.randf_range(2.8, 6.4)
+				elif roll_f > 0.45:
 					kind = "palm"
 					s = rng.randf_range(2.4, 5.2)
 				elif roll_f > 0.72:
 					kind = "bush"
 					s = rng.randf_range(1.2, 2.2)
-				elif roll_f > 0.62:
-					kind = "log" if biome == "forest" else "shrub"
-					s = rng.randf_range(0.8, 1.4)
 				elif roll_f > 0.5:
-					kind = "pine_b" if biome == "forest" else "rock"
+					kind = "rock"
 					s = rng.randf_range(1.6, 3.4)
 				else:
-					kind = "pine" if biome == "forest" else "palm"
+					kind = "palm"
 					s = rng.randf_range(2.2, 5.6)
 			elif biome == "arctic":
 				var roll_a := rng.randf()
@@ -2354,7 +2419,9 @@ func _build_props(seed: int) -> void:
 			buckets[kind].append(Transform3D(basis, Vector3(pos.x, y, pos.z)))
 		if biome == "mountain":
 			dist += rng.randf_range(3.4, 5.2)
-		elif biome == "forest" or biome == "jungle":
+		elif biome == "forest":
+			dist += rng.randf_range(1.6, 2.4)
+		elif biome == "jungle":
 			dist += rng.randf_range(3.2, 4.8)
 		elif biome == "urban":
 			dist += rng.randf_range(7.0, 11.0)
@@ -2362,10 +2429,10 @@ func _build_props(seed: int) -> void:
 			dist += rng.randf_range(8.0, 14.0)
 		else:
 			dist += rng.randf_range(5.5, 9.0)
-	if biome == "desert" or biome == "urban":
+	if biome == "desert":
 		_scatter_wrecks(rng)
 	if biome == "urban":
-		_scatter_blocks(rng)
+		_build_street(rng)
 	for kind in buckets.keys():
 		_spawn_multi(str(kind), buckets[kind])
 	_build_villages(rng)
@@ -2471,25 +2538,85 @@ func _scatter_wrecks(rng: RandomNumberGenerator) -> void:
 		dist += rng.randf_range(110.0, 160.0)
 
 
-func _scatter_blocks(rng: RandomNumberGenerator) -> void:
-	var dist := 40.0
-	while dist < route.total - 30.0:
-		for side in [-1.0, 1.0]:
-			if rng.randf() < 0.25:
-				continue
+func _build_street(rng: RandomNumberGenerator) -> void:
+	var dist := 28.0
+	var slot := 0
+	while dist < route.total - 24.0:
+		for side_v in [-1.0, 1.0]:
+			var side := float(side_v)
 			var sm: Dictionary = route.sample(dist)
-			var lat := float(side) * rng.randf_range(14.0, 24.0)
+			var depth := rng.randf_range(8.0, 13.0)
+			var width := rng.randf_range(8.0, 14.0)
+			var stories := rng.randi_range(2, 5)
+			var story_h := rng.randf_range(2.7, 3.3)
+			var height := float(stories) * story_h
+			var ruined := rng.randf() < 0.28
+			if ruined:
+				height *= rng.randf_range(0.4, 0.72)
+			var lat := side * (10.2 + depth * 0.5)
 			var pos: Vector3 = sm["pos"] + sm["right"] * lat
-			pos.y = _height(pos.x, pos.z)
-			var house := meshes.outpost()
-			var s := rng.randf_range(1.1, 2.4)
-			var crush := rng.randf_range(0.35, 1.0)
-			house.scale = Vector3(s, s * crush, s)
-			house.position = pos
-			house.rotation_degrees = Vector3(rng.randf_range(-6.0, 6.0), rng.randf_range(0.0, 360.0), rng.randf_range(-4.0, 4.0))
-			_tint_ruin(house, Color(0.42, 0.38, 0.34))
-			level_root.add_child(house)
-		dist += rng.randf_range(16.0, 26.0)
+			var ground := _height(pos.x, pos.z)
+			var shell := _town_building(width, depth, height, ruined, rng)
+			shell.position = Vector3(pos.x, ground, pos.z)
+			var road_right: Vector3 = sm["right"]
+			var inward := -road_right * side
+			if inward.length() > 0.01:
+				shell.basis = Basis.looking_at(Vector3(inward.x, 0.0, inward.z).normalized(), Vector3.UP)
+			if ruined:
+				shell.rotate_z(rng.randf_range(-0.06, 0.06))
+			level_root.add_child(shell)
+			if slot % 2 == 0:
+				var back_lat := side * (lat / side + depth * 0.55 + 6.0)
+				var back: Vector3 = sm["pos"] + sm["right"] * back_lat
+				var back_h := height * rng.randf_range(0.45, 0.85)
+				var rear := _town_building(width * 0.8, depth * 0.7, back_h, true, rng)
+				rear.position = Vector3(back.x, _height(back.x, back.z), back.z)
+				if inward.length() > 0.01:
+					rear.basis = Basis.looking_at(Vector3(inward.x, 0.0, inward.z).normalized(), Vector3.UP)
+				level_root.add_child(rear)
+			if slot % 3 == 0:
+				var curb: Vector3 = sm["pos"] + sm["right"] * side * 8.2
+				var car := meshes.build("humvee" if rng.randf() > 0.5 else "cargo", true, "urban")
+				car.position = Vector3(curb.x, _height(curb.x, curb.z), curb.z)
+				car.basis = Basis.looking_at(sm["dir"], Vector3.UP)
+				car.rotate_y(rng.randf_range(-0.4, 0.4))
+				car.rotate_z(rng.randf_range(-0.18, 0.18))
+				level_root.add_child(car)
+		slot += 1
+		dist += rng.randf_range(11.0, 14.5)
+
+
+func _town_building(width: float, depth: float, height: float, ruined: bool, rng: RandomNumberGenerator) -> Node3D:
+	var root := Node3D.new()
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var tones := [
+		Color(0.58, 0.54, 0.48),
+		Color(0.46, 0.28, 0.22),
+		Color(0.5, 0.5, 0.46),
+		Color(0.34, 0.32, 0.3),
+	]
+	var wall: Color = tones[rng.randi_range(0, tones.size() - 1)]
+	if ruined:
+		wall = wall.lerp(Color(0.22, 0.2, 0.18), 0.45)
+	_aabb(st, Vector3(0, height * 0.5, 0), Vector3(width, height, depth), wall)
+	var floors := int(maxf(height / 3.0, 1.0))
+	for i in floors:
+		var wy := 1.6 + float(i) * 3.0
+		if wy > height - 0.8:
+			break
+		var band := wall.darkened(0.45)
+		_aabb(st, Vector3(0, wy, -depth * 0.5 - 0.06), Vector3(width * 0.82, 0.7, 0.12), band)
+		_aabb(st, Vector3(-width * 0.5 - 0.06, wy, 0), Vector3(0.12, 0.55, depth * 0.7), band)
+		_aabb(st, Vector3(width * 0.5 + 0.06, wy, 0), Vector3(0.12, 0.55, depth * 0.7), band)
+	if ruined:
+		_aabb(st, Vector3(rng.randf_range(-2.0, 2.0), 0.45, depth * 0.2), Vector3(3.2, 0.9, 2.4), wall.darkened(0.25))
+		_aabb(st, Vector3(rng.randf_range(-1.0, 1.0), 0.9, -depth * 0.15), Vector3(1.8, 1.1, 1.6), Color(0.28, 0.24, 0.2))
+	_commit_surface(st)
+	var mesh_node := level_root.get_child(level_root.get_child_count() - 1)
+	level_root.remove_child(mesh_node)
+	root.add_child(mesh_node)
+	return root
 
 
 func _build_villages(rng: RandomNumberGenerator) -> void:

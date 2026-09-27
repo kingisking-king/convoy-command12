@@ -295,7 +295,8 @@ func _quad(st: SurfaceTool, xf: Transform3D, a: Vector3, b: Vector3, c: Vector3,
 
 func _tri(st: SurfaceTool, xf: Transform3D, a: Vector3, b: Vector3, c: Vector3, normal: Vector3) -> void:
 	var geo := (b - a).cross(c - a)
-	if geo.dot(normal) < 0.0:
+	# Outward normal, clockwise when looking at the face. Godot culls the other winding.
+	if geo.dot(normal) > 0.0:
 		var swap := b
 		b = c
 		c = swap
