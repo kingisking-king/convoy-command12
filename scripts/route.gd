@@ -96,6 +96,38 @@ func point(dist: float, lateral: float = 0.0) -> Vector3:
 	return s["pos"] + s["right"] * lateral
 
 
+func project(p: Vector3) -> Dictionary:
+	var best := {"d": 1.0e9, "dist": 0.0, "lateral": 0.0}
+	if pts.size() < 2:
+		return {"dist": 0.0, "lateral": 0.0}
+	var d0: Vector3 = sample(0.0)["dir"]
+	var back: Vector3 = pts[0] - d0 * 80.0
+	_consider_seg(p, back, pts[0], -80.0, best)
+	for i in range(pts.size() - 1):
+		_consider_seg(p, pts[i], pts[i + 1], cum[i], best)
+	var dend: Vector3 = sample(total)["dir"]
+	var ahead: Vector3 = pts[pts.size() - 1] + dend * 48.0
+	_consider_seg(p, pts[pts.size() - 1], ahead, total, best)
+	return {"dist": float(best["dist"]), "lateral": float(best["lateral"])}
+
+
+func _consider_seg(p: Vector3, a: Vector3, b: Vector3, dist_a: float, best: Dictionary) -> void:
+	var ab := Vector3(b.x - a.x, 0.0, b.z - a.z)
+	var ap := Vector3(p.x - a.x, 0.0, p.z - a.z)
+	var denom := ab.length_squared()
+	var t := 0.0 if denom < 0.0001 else clampf(ap.dot(ab) / denom, 0.0, 1.0)
+	var closest := Vector3(a.x, 0.0, a.z) + ab * t
+	var delta := Vector3(p.x - closest.x, 0.0, p.z - closest.z)
+	var d := delta.length()
+	if d >= float(best["d"]):
+		return
+	var dir := ab.normalized() if ab.length() > 0.001 else Vector3(0, 0, 1)
+	var right := Vector3(dir.z, 0.0, -dir.x)
+	best["d"] = d
+	best["dist"] = dist_a + ab.length() * t
+	best["lateral"] = right.dot(delta)
+
+
 func distance_to_route(p: Vector3) -> float:
 	var best := 1.0e9
 	if pts.is_empty():

@@ -35,6 +35,7 @@ var hud
 var audio
 var shot_dir := ""
 var catalog_dir := ""
+var lands_dir := ""
 var manual_sim := false
 var mission_resolved := false
 var sim_acc := 0.0
@@ -68,6 +69,12 @@ func _ready() -> void:
 		get_viewport().msaa_3d = Viewport.MSAA_DISABLED
 		_enter_menu()
 		call_deferred("_catalog_run")
+		return
+	if lands_dir != "":
+		world.set_shadows(false)
+		get_viewport().msaa_3d = Viewport.MSAA_DISABLED
+		_enter_menu()
+		call_deferred("_lands_run")
 		return
 	if shot_dir != "":
 		manual_sim = true
@@ -739,6 +746,8 @@ func _parse_args() -> void:
 			shot_dir = str(a).trim_prefix("--shots=")
 		elif str(a).begins_with("--catalog="):
 			catalog_dir = str(a).trim_prefix("--catalog=")
+		elif str(a).begins_with("--lands="):
+			lands_dir = str(a).trim_prefix("--lands=")
 
 
 func _has_arg(flag: String) -> bool:
@@ -787,6 +796,41 @@ func _shot_run() -> void:
 	for _i in 10:
 		await get_tree().process_frame
 	await _capture("05_result")
+	get_tree().quit(0)
+
+
+func _lands_run() -> void:
+	hud.root.visible = false
+	for _i in 4:
+		await get_tree().process_frame
+	for level in Defs.levels():
+		var built = RouteScript.new(level)
+		route = built
+		world.show_level(level, built)
+		world.camera_mode = "vista"
+		for body in world.slot_bodies:
+			body.visible = false
+		var dist := 150.0
+		var marks: PackedByteArray = world.grade_bridge
+		for i in marks.size():
+			if marks[i] == 0:
+				continue
+			var mark := float(world.grade_origin) + float(i) * float(world.grade_step)
+			if mark > 100.0 and mark < float(built.total) - 80.0:
+				dist = mark
+				break
+		var sm: Dictionary = built.sample(dist)
+		var right: Vector3 = sm["right"]
+		var ahead: Vector3 = sm["dir"]
+		var eye: Vector3 = sm["pos"] - ahead * 12.0 - right * 32.0
+		eye.y = world._height(eye.x, eye.z) + 8.0
+		var look: Vector3 = sm["pos"] + ahead * 48.0
+		look.y = world.road_height(dist + 48.0) + 1.2
+		world.cam.global_position = eye
+		world.cam.look_at(look, Vector3.UP)
+		for _j in 8:
+			await get_tree().process_frame
+		await _capture_to(lands_dir, "land_%s" % str(level["biome"]))
 	get_tree().quit(0)
 
 
