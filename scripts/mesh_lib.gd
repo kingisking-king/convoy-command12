@@ -8,6 +8,7 @@ var _hard := Hard.new()
 var _packed := {}
 var _tex := {}
 var _mats := {}
+var _atlas := {}
 var _wheel_i := 0
 
 
@@ -115,6 +116,7 @@ func prop(kind: String) -> Node3D:
 			path = "res://assets/cc0/nature/tree_detailed.glb"
 	var root := _instantiate(path)
 	root.name = kind
+	_fix_nature(root)
 	return root
 
 
@@ -373,6 +375,7 @@ func _glb_wheel(parent: Node3D, pos: Vector3, scale: float) -> void:
 	var inst := _instantiate("res://assets/cc0/vehicles/wheel-truck.glb")
 	inst.name = "tire"
 	inst.scale = Vector3.ONE * scale
+	_paint_rubber(inst)
 	pivot.add_child(inst)
 	parent.add_child(pivot)
 
@@ -469,12 +472,134 @@ func _instantiate(path: String) -> Node3D:
 	return packed.instantiate() as Node3D
 
 
-func _tint_tree(node: Node, paint: String, _enemy: bool) -> void:
-	var tint: Color = _palette(paint)["a"]
-	tint = Color(tint.r * 1.15, tint.g * 1.15, tint.b * 1.05)
+func _paint_rubber(node: Node) -> void:
 	for mi in node.find_children("*", "MeshInstance3D", true, false):
 		if mi is MeshInstance3D:
-			_tint_mesh(mi, tint)
+			(mi as MeshInstance3D).material_override = _mat("rubber")
+
+
+func _body_mat(paint: String) -> Material:
+	var key := "bodytex:" + paint
+	if _mats.has(key):
+		return _mats[key]
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = _military_atlas(paint)
+	m.albedo_color = Color(0.9, 0.9, 0.86)
+	m.roughness = 0.86
+	m.metallic = 0.02
+	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	_mats[key] = m
+	return m
+
+
+func _tones(paint: String) -> Array:
+	if paint == "desert":
+		return [Color(0.5, 0.4, 0.24), Color(0.4, 0.32, 0.18), Color(0.33, 0.36, 0.2)]
+	if paint == "hostile":
+		return [Color(0.32, 0.16, 0.12), Color(0.2, 0.12, 0.1), Color(0.14, 0.13, 0.12)]
+	if paint == "winter":
+		return [Color(0.58, 0.62, 0.64), Color(0.4, 0.46, 0.48), Color(0.28, 0.34, 0.32)]
+	if paint == "urban":
+		return [Color(0.36, 0.38, 0.36), Color(0.22, 0.24, 0.23), Color(0.46, 0.44, 0.38)]
+	return [Color(0.28, 0.34, 0.16), Color(0.18, 0.24, 0.11), Color(0.36, 0.34, 0.18)]
+
+
+func _military_atlas(paint: String) -> Texture2D:
+	if _atlas.has(paint):
+		return _atlas[paint]
+	var src := Image.new()
+	var err := src.load("res://assets/cc0/vehicles/Textures/colormap.png")
+	var out := Image.create(8, 8, false, Image.FORMAT_RGB8)
+	if err != OK:
+		var flat: Color = _tones(paint)[0]
+		out.fill(flat)
+	else:
+		src.convert(Image.FORMAT_RGBA8)
+		var w := src.get_width()
+		var h := src.get_height()
+		out = Image.create(w, h, false, Image.FORMAT_RGB8)
+		var tones := _tones(paint)
+		for y in h:
+			for x in w:
+				var c := src.get_pixel(x, y)
+				var luma := c.r * 0.3 + c.g * 0.59 + c.b * 0.11
+				var maxc := maxf(c.r, maxf(c.g, c.b))
+				var minc := minf(c.r, minf(c.g, c.b))
+				if luma < 0.18 or maxc < 0.22:
+					var d := clampf(luma * 0.22, 0.02, 0.07)
+					out.set_pixel(x, y, Color(d, d, d * 0.95))
+				elif c.b > c.r + 0.04 and c.b + 0.02 > c.g and c.b > 0.28 and (c.b - minc) > 0.08:
+					var g := 0.62 + luma * 0.3
+					out.set_pixel(x, y, Color(0.12 * g, 0.22 * g, 0.32 * g))
+				else:
+					var bucket := int(c.r * 5.0) + int(c.g * 5.0) * 3 + int(c.b * 5.0) * 7
+					var tone: Color = tones[posmod(bucket, tones.size())] as Color
+					var n := 0.9 + _pix_noise(x, y) * 0.16
+					var shade := clampf((0.76 + luma * 0.3) * n, 0.55, 1.02)
+					out.set_pixel(x, y, Color(tone.r * shade, tone.g * shade, tone.b * shade))
+	var tex := ImageTexture.create_from_image(out)
+	_atlas[paint] = tex
+	return tex
+
+
+func _pix_noise(x: int, y: int) -> float:
+	var n := x * 374761393 + y * 668265263
+	n = (n ^ (n >> 13)) * 1274126177
+	n = n ^ (n >> 16)
+	return float(n & 0x7fffffff) / 2147483647.0
+
+
+func _fix_nature(node: Node) -> void:
+	for mi in node.find_children("*", "MeshInstance3D", true, false):
+		var mesh_inst := mi as MeshInstance3D
+		if mesh_inst == null or mesh_inst.mesh == null:
+			continue
+		var mesh: Mesh = mesh_inst.mesh.duplicate()
+		for s in mesh.get_surface_count():
+			var src: Material = mesh_inst.mesh.surface_get_material(s)
+			var mat_name := ""
+			var albedo := Color.WHITE
+			if src != null:
+				mat_name = str(src.resource_name)
+			if src is StandardMaterial3D:
+				albedo = (src as StandardMaterial3D).albedo_color
+			var painted := StandardMaterial3D.new()
+			painted.albedo_color = _nature_color(mat_name, albedo)
+			painted.roughness = 0.94
+			painted.metallic = 0.0
+			mesh.surface_set_material(s, painted)
+		mesh_inst.mesh = mesh
+		mesh_inst.material_override = null
+
+
+func _nature_color(mat_name: String, albedo: Color) -> Color:
+	var n := mat_name.to_lower()
+	if n.find("leaf") >= 0:
+		return Color(0.16, 0.42, 0.14)
+	if n.find("grass") >= 0:
+		return Color(0.26, 0.46, 0.16)
+	if n.find("wood") >= 0 or n.find("bark") >= 0:
+		return Color(0.34, 0.22, 0.13)
+	if n.find("dirt") >= 0:
+		return Color(0.4, 0.3, 0.18)
+	if albedo.g > 0.55 and albedo.b > 0.45 and albedo.r < 0.45:
+		return Color(0.16, 0.42, 0.14)
+	if albedo.r > 0.7 and albedo.g > 0.35 and albedo.b < 0.55:
+		return Color(0.4, 0.3, 0.18)
+	return Color(0.44, 0.42, 0.39)
+
+
+func _tint_tree(node: Node, paint: String, _enemy: bool) -> void:
+	var body := _body_mat(paint)
+	for mi in node.find_children("*", "MeshInstance3D", true, false):
+		if not (mi is MeshInstance3D):
+			continue
+		var mesh_inst := mi as MeshInstance3D
+		var n := str(mesh_inst.name).to_lower()
+		if n.find("wheel") >= 0:
+			mesh_inst.material_override = _mat("rubber")
+		else:
+			mesh_inst.material_override = body
 
 
 func _tint_soldier(node: Node, enemy: bool) -> void:
@@ -548,12 +673,12 @@ func _mat(key: String) -> Material:
 	else:
 		var pal := _palette(key if key == "hostile" else scheme)
 		m.albedo_texture = _camo_texture(pal)
-		m.albedo_color = Color.WHITE
+		m.albedo_color = Color(0.78, 0.76, 0.7)
 		m.uv1_triplanar = true
 		m.uv1_world_triplanar = true
 		m.uv1_scale = Vector3(0.42, 0.42, 0.42)
-		m.roughness = 0.74
-		m.metallic = 0.08
+		m.roughness = 0.86
+		m.metallic = 0.04
 	_mats[key + scheme] = m
 	return m
 

@@ -1022,105 +1022,102 @@ func _apply_biome(which: String) -> void:
 	var env := Environment.new()
 	var sky := Sky.new()
 	var mat := ProceduralSkyMaterial.new()
-	var top := Color(0.24, 0.42, 0.62)
-	var horizon := Color(0.95, 0.58, 0.32)
-	var ground := Color(0.72, 0.48, 0.28)
-	var fog := Color(0.91, 0.68, 0.42)
-	var density := 0.0038
-	var sun_rot := Vector3(-14.0, -62.0, 0.0)
-	var sun_col := Color(1.0, 0.64, 0.34)
-	var sun_energy := 1.32
-	var fill_col := Color(0.48, 0.55, 0.78)
-	var fill_energy := 0.26
-	var exposure := 1.06
-	var saturation := 1.16
-	var sun_disk := 46.0
+	var top := Color(0.36, 0.58, 0.84)
+	var horizon := Color(0.73, 0.78, 0.84)
+	var ground := Color(0.55, 0.42, 0.26)
+	var fog := Color(0.76, 0.7, 0.58)
+	var density := 0.0034
+	var sun_rot := Vector3(-42.0, -48.0, 0.0)
+	var sun_col := Color(1.0, 0.93, 0.8)
+	var sun_energy := 1.05
+	var fill_col := Color(0.55, 0.64, 0.82)
+	var fill_energy := 0.22
+	var exposure := 0.84
+	var saturation := 1.08
 	if which == "forest":
-		top = Color(0.42, 0.64, 0.78)
-		horizon = Color(0.82, 0.9, 0.78)
-		ground = Color(0.24, 0.36, 0.22)
-		fog = Color(0.74, 0.82, 0.72)
-		density = 0.0046
-		sun_rot = Vector3(-34.0, 32.0, 0.0)
-		sun_col = Color(1.0, 0.96, 0.84)
-		sun_energy = 1.12
-		fill_col = Color(0.55, 0.68, 0.55)
-		fill_energy = 0.36
-		exposure = 1.0
-		saturation = 1.08
-		sun_disk = 26.0
+		top = Color(0.4, 0.6, 0.82)
+		horizon = Color(0.7, 0.8, 0.76)
+		ground = Color(0.2, 0.32, 0.16)
+		fog = Color(0.68, 0.76, 0.66)
+		density = 0.0042
+		sun_rot = Vector3(-50.0, 36.0, 0.0)
+		sun_col = Color(1.0, 0.97, 0.9)
+		sun_energy = 0.98
+		fill_col = Color(0.5, 0.66, 0.55)
+		fill_energy = 0.24
+		exposure = 0.82
+		saturation = 1.12
 	elif which == "mountain":
-		top = Color(0.18, 0.3, 0.48)
-		horizon = Color(0.95, 0.62, 0.55)
-		ground = Color(0.52, 0.56, 0.62)
-		fog = Color(0.82, 0.74, 0.72)
-		density = 0.0024
-		sun_rot = Vector3(-8.0, -82.0, 0.0)
-		sun_col = Color(1.0, 0.7, 0.52)
-		sun_energy = 1.26
-		fill_col = Color(0.45, 0.52, 0.78)
-		fill_energy = 0.34
-		exposure = 1.05
-		saturation = 1.1
-		sun_disk = 40.0
+		top = Color(0.32, 0.5, 0.78)
+		horizon = Color(0.68, 0.74, 0.82)
+		ground = Color(0.38, 0.4, 0.42)
+		fog = Color(0.7, 0.74, 0.78)
+		density = 0.003
+		sun_rot = Vector3(-46.0, -58.0, 0.0)
+		sun_col = Color(1.0, 0.94, 0.86)
+		sun_energy = 1.02
+		fill_col = Color(0.5, 0.58, 0.78)
+		fill_energy = 0.26
+		exposure = 0.8
+		saturation = 1.06
 	mat.sky_top_color = top
 	mat.sky_horizon_color = horizon
-	mat.ground_horizon_color = horizon.darkened(0.12)
+	mat.ground_horizon_color = horizon.darkened(0.18)
 	mat.ground_bottom_color = ground
-	mat.sun_angle_max = sun_disk
-	mat.sky_energy_multiplier = 1.08
-	mat.sky_curve = 0.12
+	mat.sun_angle_max = 12.0
+	mat.sky_energy_multiplier = 0.72
+	mat.sky_curve = 0.08
 	sky.sky_material = mat
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.85
+	env.ambient_light_energy = 0.38
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	env.fog_enabled = true
 	env.fog_mode = Environment.FOG_MODE_EXPONENTIAL
 	env.fog_density = density
 	env.fog_light_color = fog
-	env.fog_aerial_perspective = 0.62
-	env.fog_sky_affect = 0.55
+	env.fog_aerial_perspective = 0.35
+	env.fog_sky_affect = 0.4
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	env.tonemap_exposure = exposure
+	env.tonemap_white = 6.0
 	env.glow_enabled = true
-	env.glow_intensity = 0.55
-	env.glow_strength = 0.9
-	env.glow_bloom = 0.16
-	env.glow_hdr_threshold = 0.78
+	env.glow_intensity = 0.12
+	env.glow_strength = 0.45
+	env.glow_bloom = 0.04
+	env.glow_hdr_threshold = 1.45
 	env.adjustment_enabled = true
-	env.adjustment_brightness = 1.03
-	env.adjustment_contrast = 1.1
+	env.adjustment_brightness = 1.0
+	env.adjustment_contrast = 1.05
 	env.adjustment_saturation = saturation
+	env.volumetric_fog_enabled = false
 	if RenderingServer.get_rendering_device() != null:
 		env.ssao_enabled = true
-		env.ssao_radius = 1.6
-		env.ssao_intensity = 1.2
-		env.ssao_power = 1.45
-		if which != "mountain":
-			env.volumetric_fog_enabled = true
-			env.volumetric_fog_density = 0.02 if which == "forest" else 0.012
-			env.volumetric_fog_albedo = fog
-			env.volumetric_fog_length = 140.0
+		env.ssao_radius = 1.2
+		env.ssao_intensity = 0.7
+		env.ssao_power = 1.2
 	env_node.environment = env
 	sun.rotation_degrees = sun_rot
 	sun.light_color = sun_col
 	sun.light_energy = sun_energy
+	sun.light_specular = 0.15
 	sun.shadow_enabled = shadows_on
-	fill.rotation_degrees = Vector3(-22.0, sun_rot.y + 168.0, 0.0)
+	fill.rotation_degrees = Vector3(-24.0, sun_rot.y + 170.0, 0.0)
 	fill.light_color = fill_col
 	fill.light_energy = fill_energy
+	fill.light_specular = 0.0
 
 
 func _build_terrain() -> void:
 	_bake_land()
-	var bounds: Rect2 = route.bounds(96.0)
-	var step := 5.5
+	var bounds: Rect2 = route.bounds(720.0)
+	var step := 8.0
 	var nx := int(bounds.size.x / step) + 1
 	var nz := int(bounds.size.y / step) + 1
-	if nx * nz > 22000:
-		step *= sqrt(float(nx * nz) / 22000.0)
+	var cap := 36000
+	if nx * nz > cap:
+		step *= sqrt(float(nx * nz) / float(cap))
 		nx = int(bounds.size.x / step) + 1
 		nz = int(bounds.size.y / step) + 1
 	var st := SurfaceTool.new()
@@ -1148,24 +1145,33 @@ func _build_terrain() -> void:
 			var cb: Color = colors[ix + 1 + iz * nx]
 			var cc: Color = colors[ix + (iz + 1) * nx]
 			var cd: Color = colors[ix + 1 + (iz + 1) * nx]
-			_tri(st, a, c, b, ca, cc, cb)
-			_tri(st, b, c, d, cb, cc, cd)
+			_add_up_tri(st, a, b, c, ca, cb, cc)
+			_add_up_tri(st, b, d, c, cb, cd, cc)
 	st.generate_normals()
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
 	var m := StandardMaterial3D.new()
 	m.vertex_color_use_as_albedo = true
-	m.albedo_texture = _ensure_grain()
-	m.uv1_triplanar = true
-	m.uv1_scale = Vector3(0.18, 0.18, 0.18)
-	m.roughness = 0.96
+	m.albedo_color = Color.WHITE
+	m.roughness = 1.0
+	m.metallic = 0.0
+	m.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	m.cull_mode = BaseMaterial3D.CULL_BACK
 	mi.material_override = m
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	level_root.add_child(mi)
-	_build_water(bounds)
+	_build_water_cells(grid, nx, nz)
 
 
-func _tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, ca: Color, cb: Color, cc: Color) -> void:
+func _add_up_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, ca: Color, cb: Color, cc: Color) -> void:
+	var n := (b - a).cross(c - a)
+	if n.y < 0.0:
+		var swap_p := b
+		b = c
+		c = swap_p
+		var swap_c := cb
+		cb = cc
+		cc = swap_c
 	st.set_color(ca)
 	st.add_vertex(a)
 	st.set_color(cb)
@@ -1247,14 +1253,14 @@ func _bake_land() -> void:
 		smooth[i] = minf(smooth[i], smooth[i - 1] + max_rise)
 	for i in range(count - 2, -1, -1):
 		smooth[i] = minf(smooth[i], smooth[i + 1] + max_rise)
-	water_y = -3.4 if biome == "desert" else (-2.4 if biome == "forest" else -3.6)
+	water_y = 1.15 if biome == "desert" else (2.05 if biome == "forest" else 3.1)
 	for i in count:
 		smooth[i] = maxf(smooth[i], water_y + 1.7)
 	grade = smooth
 	grade_bridge = PackedByteArray()
 	grade_bridge.resize(count)
 	for i in count:
-		grade_bridge[i] = 1 if raw[i] < smooth[i] - 7.5 else 0
+		grade_bridge[i] = 1 if raw[i] < smooth[i] - 5.2 else 0
 	var expanded := grade_bridge.duplicate()
 	for i in count:
 		if grade_bridge[i] == 0:
@@ -1319,32 +1325,30 @@ func _stretch(n: float) -> float:
 
 func _natural(x: float, z: float) -> float:
 	if biome == "forest":
-		var region := _stretch(_fbm(x * 0.0046, z * 0.0046, 4)) * 26.0
-		var hills := _stretch(_fbm(x * 0.013 + 6.0, z * 0.012, 4)) * 14.0
-		var detail := (_fbm(x * 0.05, z * 0.046, 2) - 0.5) * 2.8
-		return region + hills + detail
+		var region := _fbm(x * 0.0034, z * 0.0032, 4)
+		var hills := _fbm(x * 0.0085 + 4.0, z * 0.0076, 4)
+		return 5.2 + (region - 0.46) * 13.0 + (hills - 0.5) * 7.0
 	if biome == "mountain":
-		var range_h := _stretch(_fbm(x * 0.0026, z * 0.0026, 4)) * 24.0
-		var ridge := (_ridged(x * 0.0056 + 2.0, z * 0.0054) - 0.36) * 78.0
-		var detail := (_fbm(x * 0.024, z * 0.022, 3) - 0.5) * 6.0
-		return range_h + ridge + detail
-	var dunes := _stretch(_fbm(x * 0.004, z * 0.004, 4)) * 18.0
-	var ripples := _stretch(_fbm(x * 0.015 + 11.0, z * 0.014, 3)) * 7.0
-	return dunes + ripples
+		var ridge := _ridged(x * 0.0036 + 1.5, z * 0.0034)
+		var roll := _fbm(x * 0.0021, z * 0.002, 3)
+		return 7.0 + ridge * ridge * 26.0 + (roll - 0.5) * 8.0
+	var dunes := _fbm(x * 0.0028, z * 0.0026, 4)
+	var ripples := (_fbm(x * 0.011 + 9.0, z * 0.01, 3) - 0.5) * 2.2
+	return 5.0 + (dunes - 0.48) * 14.0 + ripples
 
 
 func _river_carve(dist: float, lateral: float) -> float:
-	var center := 52.0 + sin(dist * 0.014 + float(land_seed) * 0.002) * 14.0
+	var center := 50.0 + sin(dist * 0.012 + float(land_seed) * 0.001) * 8.0
 	if biome == "mountain":
-		center = 58.0 + sin(dist * 0.011) * 10.0
+		center = 54.0 + sin(dist * 0.01) * 6.0
 	elif biome == "desert":
-		center = 46.0 + sin(dist * 0.018) * 12.0
-	var half := 6.0 if biome == "desert" else 8.5
+		center = 46.0 + sin(dist * 0.016) * 7.0
+	var half := 6.5 if biome == "desert" else 8.0
 	var d := absf(lateral - center)
-	var reach := half + 9.0
+	var reach := half + 16.0
 	if d > reach:
 		return 0.0
-	var depth := 1.7 if biome == "desert" else (3.6 if biome == "forest" else 4.6)
+	var depth := 3.4 if biome == "desert" else (4.6 if biome == "forest" else 5.2)
 	if d < half:
 		return depth
 	return depth * (1.0 - smoothstep(half, reach, d))
@@ -1360,13 +1364,13 @@ func _height(x: float, z: float) -> float:
 	var lat := absf(lat_signed)
 	natural -= _river_carve(dist, lat_signed)
 	var road_y := road_height(dist)
-	if _bridge_at(dist) and lat < 14.0:
-		var gorge := minf(natural, road_y - 4.4)
-		return lerpf(gorge, natural, smoothstep(7.0, 14.0, lat))
-	if lat < 12.0:
-		return road_y - 0.4
-	if lat < 20.0:
-		return lerpf(road_y, natural, smoothstep(12.0, 20.0, lat))
+	if _bridge_at(dist) and lat < 22.0:
+		var gorge := minf(natural, road_y - 5.0)
+		return lerpf(gorge, natural, smoothstep(9.0, 22.0, lat))
+	if lat < 10.0:
+		return road_y - 0.45
+	if lat < 36.0:
+		return lerpf(road_y - 0.45, natural, smoothstep(10.0, 36.0, lat))
 	return natural
 
 
@@ -1386,43 +1390,39 @@ func _grid_slope(grid: Array, nx: int, nz: int, ix: int, iz: int, step: float) -
 
 func _blend_color(p: Vector3, slope: float) -> Color:
 	var h := p.y
-	var sand := Color(0.78, 0.64, 0.42)
-	var dirt := Color(0.46, 0.34, 0.22)
-	var grass := Color(0.28, 0.46, 0.22)
-	var rock := Color(0.46, 0.47, 0.49)
-	var snow := Color(0.91, 0.94, 0.96)
+	var sand := Color(0.62, 0.46, 0.26)
+	var dirt := Color(0.4, 0.28, 0.16)
+	var grass := Color(0.18, 0.46, 0.14)
+	var rock := Color(0.42, 0.42, 0.44)
+	var snow := Color(0.9, 0.92, 0.94)
 	var col := sand
 	if biome == "desert":
-		col = sand.lerp(dirt, clampf(slope * 1.5, 0.0, 1.0))
-		if h > 5.0:
-			col = col.lerp(rock, clampf((h - 5.0) / 6.0, 0.0, 1.0))
-		if h < water_y + 0.4:
-			col = Color(0.55, 0.5, 0.36)
+		col = sand.lerp(dirt, clampf(slope * 1.2, 0.0, 0.85))
+		if h > 9.0:
+			col = col.lerp(rock, clampf((h - 9.0) / 6.0, 0.0, 0.55))
+		if h < water_y + 0.35:
+			col = Color(0.42, 0.36, 0.22)
 	elif biome == "forest":
-		col = grass.lerp(dirt, clampf(0.2 + slope * 0.85, 0.0, 1.0))
-		if slope > 0.4:
-			col = col.lerp(rock, clampf((slope - 0.4) / 0.5, 0.0, 1.0))
-		if h > 10.0:
-			col = col.lerp(rock, clampf((h - 10.0) / 8.0, 0.0, 1.0))
-		if h > 14.0:
-			col = col.lerp(snow, clampf((h - 14.0) / 6.0, 0.0, 1.0))
-		if h < water_y + 0.45:
-			col = Color(0.26, 0.32, 0.2)
+		col = grass.lerp(dirt, clampf(slope * 0.7, 0.0, 0.75))
+		if slope > 0.55:
+			col = col.lerp(rock, clampf((slope - 0.55) / 0.7, 0.0, 0.8))
+		if h < water_y + 0.35:
+			col = Color(0.16, 0.28, 0.14)
 	else:
-		if h < 3.5:
-			col = grass.lerp(dirt, 0.4)
-		elif h < 11.0:
-			col = grass.lerp(rock, clampf((h - 3.5) / 7.5, 0.0, 1.0))
-		elif h < 15.0:
+		if h < 8.0:
+			col = grass.lerp(dirt, 0.35)
+		elif h < 16.0:
+			col = dirt.lerp(rock, clampf((h - 8.0) / 8.0, 0.0, 1.0))
+		elif h < 24.0:
 			col = rock
 		else:
-			col = rock.lerp(snow, clampf((h - 15.0) / 10.0, 0.0, 1.0))
-		if slope > 0.48 and h < 22.0:
-			col = col.lerp(rock, clampf((slope - 0.48) / 0.45, 0.0, 0.9))
-		if h < water_y + 0.5:
-			col = Color(0.3, 0.34, 0.32)
+			col = rock.lerp(snow, clampf((h - 24.0) / 6.0, 0.0, 1.0))
+		if slope > 0.55 and h < 24.0:
+			col = col.lerp(rock, clampf((slope - 0.55) / 0.5, 0.0, 0.85))
+		if h < water_y + 0.35:
+			col = Color(0.28, 0.32, 0.28)
 	var grain := _noise(p.x * 0.17, p.z * 0.17)
-	return col.lerp(col.lightened(0.16), clampf(grain, 0.0, 1.0) * 0.4)
+	return col.lerp(col.darkened(0.12), (1.0 - grain) * 0.22)
 
 
 func _ensure_grain() -> Texture2D:
@@ -1437,23 +1437,46 @@ func _ensure_grain() -> Texture2D:
 	return ground_grain
 
 
-func _build_water(bounds: Rect2) -> void:
-	var mesh := PlaneMesh.new()
-	mesh.size = bounds.size
-	var mi := MeshInstance3D.new()
-	mi.mesh = mesh
-	mi.position = Vector3(bounds.position.x + bounds.size.x * 0.5, water_y, bounds.position.y + bounds.size.y * 0.5)
-	var m := StandardMaterial3D.new()
+func _build_water_cells(grid: Array, nx: int, nz: int) -> void:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var count := 0
+	var col := Color(0.16, 0.38, 0.36)
 	if biome == "desert":
-		m.albedo_color = Color(0.28, 0.52, 0.55, 0.62)
-	elif biome == "forest":
-		m.albedo_color = Color(0.2, 0.38, 0.36, 0.7)
-	else:
-		m.albedo_color = Color(0.28, 0.4, 0.5, 0.66)
-	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.roughness = 0.12
-	m.metallic = 0.08
-	m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+		col = Color(0.2, 0.4, 0.36)
+	elif biome == "mountain":
+		col = Color(0.14, 0.28, 0.34)
+	for iz in nz - 1:
+		for ix in nx - 1:
+			var a: Vector3 = grid[ix + iz * nx]
+			var b: Vector3 = grid[ix + 1 + iz * nx]
+			var c: Vector3 = grid[ix + (iz + 1) * nx]
+			var d: Vector3 = grid[ix + 1 + (iz + 1) * nx]
+			var avg := (a.y + b.y + c.y + d.y) * 0.25
+			if avg > water_y + 0.25:
+				continue
+			var mid := (a + b + c + d) * 0.25
+			var proj: Dictionary = route.project(mid)
+			if absf(float(proj["lateral"])) < 16.0:
+				continue
+			var y := water_y + 0.16
+			var wa := Vector3(a.x, y, a.z)
+			var wb := Vector3(b.x, y, b.z)
+			var wc := Vector3(c.x, y, c.z)
+			var wd := Vector3(d.x, y, d.z)
+			_add_up_tri(st, wa, wb, wc, col, col, col)
+			_add_up_tri(st, wb, wd, wc, col, col, col)
+			count += 1
+	if count == 0:
+		return
+	st.generate_normals()
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	var m := StandardMaterial3D.new()
+	m.vertex_color_use_as_albedo = true
+	m.roughness = 0.55
+	m.metallic = 0.0
+	m.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 	mi.material_override = m
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	level_root.add_child(mi)
@@ -1651,22 +1674,25 @@ func _spawn_multi(kind: String, xforms: Array) -> void:
 			mm.set_instance_transform(i, xf * local)
 		var inst := MultiMeshInstance3D.new()
 		inst.multimesh = mm
-		var mat: Material = mesh_inst.material_override
-		if mat == null and mesh_inst.mesh.get_surface_count() > 0:
-			mat = mesh_inst.mesh.surface_get_material(0)
-		if mat == null:
-			var fallback := StandardMaterial3D.new()
-			fallback.roughness = 0.9
-			if kind == "rock" or kind == "rock_b":
-				fallback.albedo_color = Color(0.46, 0.45, 0.42)
-			elif kind == "cactus":
-				fallback.albedo_color = Color(0.34, 0.52, 0.26)
-			elif kind == "palm":
-				fallback.albedo_color = Color(0.28, 0.48, 0.22)
-			else:
-				fallback.albedo_color = Color(0.2, 0.38, 0.16)
-			mat = fallback
-		inst.material_override = mat
+		var surfaces := mesh_inst.mesh.get_surface_count()
+		if surfaces <= 1:
+			var mat: Material = mesh_inst.material_override
+			if mat == null and surfaces > 0:
+				mat = mesh_inst.mesh.surface_get_material(0)
+			if mat == null:
+				var fallback := StandardMaterial3D.new()
+				fallback.roughness = 0.94
+				fallback.metallic = 0.0
+				if kind == "rock" or kind == "rock_b":
+					fallback.albedo_color = Color(0.44, 0.42, 0.39)
+				elif kind == "cactus":
+					fallback.albedo_color = Color(0.2, 0.42, 0.16)
+				elif kind == "palm":
+					fallback.albedo_color = Color(0.18, 0.42, 0.14)
+				else:
+					fallback.albedo_color = Color(0.16, 0.4, 0.14)
+				mat = fallback
+			inst.material_override = mat
 		inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		level_root.add_child(inst)
 	node.free()
