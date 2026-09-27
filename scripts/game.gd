@@ -1038,34 +1038,46 @@ func _lands_run() -> void:
 		world.show_level(level, built)
 		for body in world.slot_bodies:
 			body.visible = false
-		var dist := 220.0
-		if float(built.total) < 280.0:
-			dist = float(built.total) * 0.45
+		var total := float(built.total)
+		var stations: Array[float] = [
+			clampf(total * 0.08, 36.0, total * 0.22),
+			total * 0.48,
+			clampf(total * 0.88, total * 0.72, total - 28.0),
+		]
+		var station_names: Array[String] = ["start", "mid", "end"]
 		var camo := Defs.camo_for_biome(str(level["biome"]))
 		var parade := ["tank", "humvee", "cargo"]
+		var units: Array[Node3D] = []
 		for i in parade.size():
 			var unit: Node3D = world.meshes.build(str(parade[i]), false, camo)
 			world.unit_root.add_child(unit)
-			var along := dist - float(i) * 9.0
-			var pose: Dictionary = built.sample(along)
-			var spot: Vector3 = pose["pos"]
-			spot.y = world.road_height(along) + 0.05
-			unit.position = spot
-			var face: Vector3 = pose["dir"]
-			world._face_along(unit, face, world._grade_pitch(along))
-		var sm: Dictionary = built.sample(dist)
-		world.camera_mode = "drive"
-		world.yaw = 0.22
-		world.pitch = 0.28
-		world.dist = 44.0
-		world.cam_ready = false
-		world.focus = sm["pos"]
-		world.focus.y = world.road_height(dist)
-		world.travel_dir = sm["dir"]
-		for _j in 8:
-			world.tick(0.05)
-			await get_tree().process_frame
-		await _capture_to(lands_dir, "land_%s" % str(level["biome"]))
+			units.append(unit)
+		for s in stations.size():
+			var dist: float = stations[s]
+			for i in units.size():
+				var along := dist - float(i) * 9.0
+				var pose: Dictionary = built.sample(along)
+				var spot: Vector3 = pose["pos"]
+				spot.y = world.road_height(along) + 0.05
+				units[i].position = spot
+				var face: Vector3 = pose["dir"]
+				world._face_along(units[i], face, world._grade_pitch(along))
+			var sm: Dictionary = built.sample(dist)
+			world.camera_mode = "drive"
+			world.yaw = 0.22
+			world.pitch = 0.28
+			world.dist = 44.0
+			world.cam_ready = false
+			world.focus = sm["pos"]
+			world.focus.y = world.road_height(dist)
+			world.travel_dir = sm["dir"]
+			for _j in 8:
+				world.tick(0.05)
+				await get_tree().process_frame
+			var eye: Vector3 = world.cam.global_position
+			var ground: float = world._height(eye.x, eye.z)
+			print("LAND %s %s eye_y=%.2f ground=%.2f clearance=%.2f" % [str(level["biome"]), station_names[s], eye.y, ground, eye.y - ground])
+			await _capture_to(lands_dir, "land_%s_%s" % [str(level["biome"]), station_names[s]])
 	get_tree().quit(0)
 
 
