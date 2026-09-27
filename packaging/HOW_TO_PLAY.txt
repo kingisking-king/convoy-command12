@@ -34,4 +34,15 @@ DRIVE
 
 Yellow on the map is cargo. Red is hostile.
 
+SANDBOX
+  From the main menu. Unlimited money, every unit, and every upgrade.
+  Pick Dust Road, Pine Cut, or High Pass.
+  Set which enemies attack, and how many.
+  Difficulty slider, or Easy / Normal / Hard / Brutal.
+  God mode keeps the convoy from taking damage.
+  Speed slider changes how fast the drive runs.
+  Left click the ground to spawn the selected enemy.
+  Restart Drive runs the same column again immediately.
+  Sandbox does not change campaign progress.
+
 Art: Kenney car kit, mini characters, and nature kit (CC0). See CREDITS.

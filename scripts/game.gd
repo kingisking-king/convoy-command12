@@ -8,7 +8,7 @@ const WorldScript = preload("res://scripts/world_view.gd")
 const HudScript = preload("res://scripts/hud.gd")
 const AudioScript = preload("res://scripts/audio_fx.gd")
 
-enum Phase { MENU, HELP, BRIEF, BUILD, DRIVE, PAUSE, RESULTS }
+enum Phase { MENU, HELP, BRIEF, BUILD, DRIVE, PAUSE, RESULTS, SANDBOX }
 
 const SAVE_PATH := "user://campaign.cfg"
 const PRESET_PATH := "user://formations.cfg"
@@ -42,6 +42,13 @@ var sim_acc := 0.0
 var show_fps := false
 var fps_label: Label
 var return_phase: int = Phase.MENU
+var sandbox := false
+var sandbox_map := 0
+var sandbox_god := false
+var sandbox_threat := 1.0
+var sandbox_speed := 1.0
+var sandbox_level: Dictionary = {}
+var sandbox_shot := ""
 
 func _ready() -> void:
 	audio = AudioScript.new()
@@ -75,6 +82,12 @@ func _ready() -> void:
 		get_viewport().msaa_3d = Viewport.MSAA_DISABLED
 		_enter_menu()
 		call_deferred("_lands_run")
+		return
+	if sandbox_shot != "":
+		world.set_shadows(false)
+		get_viewport().msaa_3d = Viewport.MSAA_DISABLED
+		_enter_menu()
+		call_deferred("_sandbox_shot_run")
 		return
 	if shot_dir != "":
 		manual_sim = true
@@ -127,6 +140,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_build_input(event)
 	elif phase == Phase.DRIVE:
 		_drive_input(event)
+		if sandbox:
+			_sandbox_click(event)
 	if phase == Phase.BUILD or phase == Phase.DRIVE or phase == Phase.BRIEF:
 		_camera_input(event)
 
@@ -155,6 +170,12 @@ func _connect_hud() -> void:
 	hud.preset_save.connect(_on_preset_save)
 	hud.preset_load.connect(_on_preset_load)
 	hud.preset_delete.connect(_on_preset_delete)
+	hud.sandbox_pressed.connect(_on_sandbox)
+	hud.sandbox_arm_pressed.connect(_on_sandbox_arm)
+	hud.sandbox_god_toggled.connect(_on_sandbox_god)
+	hud.sandbox_speed_changed.connect(_on_sandbox_speed)
+	hud.sandbox_threat_changed.connect(_on_sandbox_threat)
+	hud.sandbox_restart_pressed.connect(_on_retry)
 
 
 func _enter_menu() -> void:
@@ -193,9 +214,90 @@ func _on_back() -> void:
 		else:
 			_open_brief()
 		return
+	if phase == Phase.SANDBOX:
+		_leave_sandbox()
+		return
 	if phase == Phase.BUILD:
+		if sandbox:
+			phase = Phase.SANDBOX
+			hud.show_sandbox()
+			return
 		_open_brief()
 		return
+	_enter_menu()
+
+
+func _budget() -> int:
+	return 999999 if sandbox else bank
+
+
+func _on_sandbox() -> void:
+	sandbox = true
+	phase = Phase.SANDBOX
+	hud.set_sandbox_chrome(true)
+	hud.show_sandbox()
+
+
+func _on_sandbox_arm() -> void:
+	var settings: Dictionary = hud.sandbox_settings()
+	sandbox = true
+	sandbox_map = clampi(int(settings["map"]), 0, Defs.levels().size() - 1)
+	sandbox_god = bool(settings["god"])
+	sandbox_threat = clampf(float(settings["threat"]), 0.5, 2.5)
+	sandbox_speed = clampf(float(settings["speed"]), 0.25, 3.0)
+	_prepare_sandbox_level(settings["counts"])
+	_on_arm()
+
+
+func _prepare_sandbox_level(counts: Dictionary) -> void:
+	var src: Dictionary = Defs.levels()[sandbox_map].duplicate(true)
+	src["charges"] = {"smoke": 99, "airstrike": 99, "repair": 99}
+	src["base_pay"] = 0
+	src["brief"] = "Sandbox. Unlimited budget. This run does not touch the campaign."
+	src["ambushes"] = _sandbox_ambushes(float(src["length"]), counts)
+	sandbox_level = src
+
+
+func _sandbox_ambushes(length: float, counts: Dictionary) -> Array:
+	var kinds := ["infantry", "technical", "rpg", "tank", "heli"]
+	var queue: Array = []
+	for kind in kinds:
+		var n := clampi(int(counts.get(kind, 0)), 0, 30)
+		for _i in n:
+			queue.append(kind)
+	if queue.is_empty():
+		return []
+	var waves: Array = []
+	var chunk: Array = []
+	for kind in queue:
+		chunk.append(kind)
+		if chunk.size() >= 5:
+			waves.append(chunk.duplicate())
+			chunk.clear()
+	if not chunk.is_empty():
+		waves.append(chunk)
+	var ambushes: Array = []
+	var span := maxf(length - 160.0, 80.0)
+	for i in waves.size():
+		var at := 80.0 + span * (float(i) + 0.5) / float(maxi(waves.size(), 1))
+		var specs: Array = []
+		var side := 1.0
+		for kind in waves[i]:
+			specs.append({
+				"k": str(kind),
+				"side": side,
+				"lat": 18.0 + float(specs.size() % 3) * 5.0,
+				"ahead": float(specs.size()) * 7.0,
+			})
+			side = -side
+		ambushes.append({"at": at, "banner": "Sandbox contact", "units": specs})
+	return ambushes
+
+
+func _leave_sandbox() -> void:
+	sandbox = false
+	sim = null
+	hud.set_sandbox_chrome(false)
 	_enter_menu()
 
 
@@ -215,21 +317,34 @@ func _on_arm() -> void:
 	selected_i = -1
 	drag_index = -1
 	selected_kind = "humvee"
-	var level: Dictionary = Defs.levels()[level_index]
+	var level: Dictionary = _active_level()
+	if sandbox:
+		route = RouteScript.new(level)
+		world.show_level(level, route)
+		world.camera_mode = "build"
 	camo = Defs.camo_for_biome(str(level["biome"]))
 	if convoy_name == "":
 		convoy_name = "Column One"
 	_refresh_build()
+	if sandbox:
+		hud.toast("Sandbox budget is unlimited. Upgrades are all unlocked.")
+
+
+func _active_level() -> Dictionary:
+	if sandbox and not sandbox_level.is_empty():
+		return sandbox_level
+	return Defs.levels()[level_index]
 
 
 func _refresh_build() -> void:
-	var level: Dictionary = Defs.levels()[level_index]
+	var level: Dictionary = _active_level()
 	world.meshes.scheme = camo
-	hud.show_build(level, bank, formation, selected_kind, route, {
+	hud.show_build(level, _budget(), formation, selected_kind, route, {
 		"name": convoy_name,
 		"camo": camo,
 		"selected": selected_i,
 		"presets": _preset_names(),
+		"unlimited": sandbox,
 	})
 	world.show_formation(formation, camo, selected_i)
 
@@ -240,7 +355,7 @@ func _on_unit_selected(kind: String) -> void:
 
 
 func _on_quick() -> void:
-	formation = Defs.recommended(level_index, bank)
+	formation = Defs.recommended(sandbox_map if sandbox else level_index, _budget())
 	selected_i = -1
 	audio.play("ui_place", -4.0)
 	_refresh_build()
@@ -369,7 +484,7 @@ func _remove_at(cell: Vector2i) -> void:
 func _can_add(kind: String) -> bool:
 	var trial: Array = formation.duplicate()
 	trial.append(Defs.make_unit(kind, 0, 0))
-	return Defs.roster_cost(trial) <= bank
+	return Defs.roster_cost(trial) <= _budget()
 
 
 func _on_rotate() -> void:
@@ -417,7 +532,7 @@ func _on_upgrade(stat: String, level: int) -> void:
 		return
 	var previous := int(formation[selected_i][stat])
 	formation[selected_i][stat] = clampi(level, 0, 2)
-	if Defs.roster_cost(formation) > bank:
+	if Defs.roster_cost(formation) > _budget():
 		formation[selected_i][stat] = previous
 		hud.toast("Not enough budget for that upgrade.")
 		return
@@ -478,7 +593,7 @@ func _on_preset_load(preset_name: String) -> void:
 			int(entry.get("weapon", 0)),
 			int(entry.get("speed", 0)),
 		))
-	if Defs.roster_cost(loaded) > bank:
+	if Defs.roster_cost(loaded) > _budget():
 		hud.toast("That preset costs more than the budget.")
 		return
 	if Defs.count_kind(loaded, "cargo") > 4:
@@ -525,7 +640,7 @@ func _on_deploy() -> void:
 		hud.toast("Bring at least one cargo truck.")
 		return
 	column_cost = Defs.roster_cost(roster)
-	if column_cost > bank:
+	if column_cost > _budget():
 		hud.toast("Over budget.")
 		return
 	_start_drive(roster)
@@ -534,25 +649,30 @@ func _on_deploy() -> void:
 func _start_drive(roster: Array) -> void:
 	phase = Phase.DRIVE
 	mission_resolved = false
-	mission_level = level_index
+	mission_level = sandbox_map if sandbox else level_index
 	sim_acc = 0.0
-	var level: Dictionary = Defs.levels()[level_index]
+	var level: Dictionary = _active_level()
 	sim = SimScript.new()
 	world.meshes.scheme = camo
 	sim.start(level, roster, route, int(level["seed"]) + 100 + attempt * 17)
+	sim.sandbox = sandbox
+	sim.god_mode = sandbox_god
+	sim.threat = sandbox_threat
 	world.begin_drive()
 	audio.set_music("music_drive")
-	hud.show_drive()
-	hud.show_banner("Convoy rolling. Stay with the cargo.")
+	hud.show_drive(sandbox)
+	hud.show_banner("Sandbox rolling." if sandbox else "Convoy rolling. Stay with the cargo.")
 	world.sync(sim, 0.016)
 
 
 func _advance(dt: float) -> void:
 	if sim == null or sim.status != "running":
 		return
-	sim_acc += minf(dt, 0.1)
+	var speed := sandbox_speed if sandbox else 1.0
+	sim_acc += minf(dt, 0.1) * speed
+	var cap := 10 if sandbox else 5
 	var steps := 0
-	while sim_acc >= 1.0 / 60.0 and steps < 5 and sim.status == "running":
+	while sim_acc >= 1.0 / 60.0 and steps < cap and sim.status == "running":
 		sim.tick(1.0 / 60.0)
 		_drain()
 		sim_acc -= 1.0 / 60.0
@@ -629,7 +749,7 @@ func _on_escape() -> void:
 			hud.show_pause()
 		Phase.PAUSE:
 			_on_resume()
-		Phase.BUILD, Phase.BRIEF, Phase.HELP:
+		Phase.BUILD, Phase.BRIEF, Phase.HELP, Phase.SANDBOX:
 			_on_back()
 		Phase.RESULTS:
 			pass
@@ -646,6 +766,25 @@ func _on_resume() -> void:
 
 func _finish(status: String) -> void:
 	var won := status == "won"
+	if sandbox:
+		var sand: Dictionary = _active_level()
+		phase = Phase.RESULTS
+		audio.set_music("music_menu")
+		hud.show_results({
+			"won": won,
+			"grade": Defs.grade(won, sim.delivered, sim.cargo_total, sim.escorts_lost),
+			"level_name": sand["name"],
+			"delivered": sim.delivered,
+			"cargo_total": sim.cargo_total,
+			"kills": sim.kills,
+			"escorts_lost": sim.escorts_lost,
+			"time": sim.time,
+			"pay": {"cost": 0, "salvage": 0, "base": 0, "cargo": 0, "kills": 0, "net": 0},
+			"bank": bank,
+			"last": false,
+			"sandbox": true,
+		})
+		return
 	var level: Dictionary = Defs.levels()[level_index]
 	var pay := Defs.payout(level, sim.delivered, sim.kills, column_cost) if won else {
 		"cost": column_cost, "salvage": 0, "base": 0, "cargo": 0, "kills": 0, "net": 0,
@@ -685,6 +824,9 @@ func _on_next() -> void:
 
 
 func _on_retry() -> void:
+	if sandbox:
+		_restart_sandbox_drive()
+		return
 	level_index = mission_level
 	campaign_done = false
 	attempt += 1
@@ -696,7 +838,63 @@ func _on_retry() -> void:
 
 func _on_menu() -> void:
 	sim = null
+	if sandbox:
+		_leave_sandbox()
+		return
 	_enter_menu()
+
+
+func _restart_sandbox_drive() -> void:
+	if not sandbox or route == null or sandbox_level.is_empty():
+		return
+	mission_resolved = false
+	sim_acc = 0.0
+	world.clear_actors()
+	var level: Dictionary = sandbox_level
+	sim = SimScript.new()
+	sim.start(level, _packed_roster(), route, int(level["seed"]) + 100)
+	sim.sandbox = true
+	sim.god_mode = sandbox_god
+	sim.threat = sandbox_threat
+	phase = Phase.DRIVE
+	world.begin_drive()
+	audio.set_music("music_drive")
+	hud.show_drive(true)
+	hud.show_banner("Drive restarted.")
+	world.sync(sim, 0.016)
+
+
+func _on_sandbox_god(on: bool) -> void:
+	sandbox_god = on
+	if sim != null:
+		sim.god_mode = on
+
+
+func _on_sandbox_speed(speed: float) -> void:
+	sandbox_speed = clampf(speed, 0.25, 3.0)
+
+
+func _on_sandbox_threat(scale: float) -> void:
+	sandbox_threat = clampf(scale, 0.5, 2.5)
+	if sim != null:
+		sim.threat = sandbox_threat
+
+
+func _sandbox_click(event: InputEvent) -> void:
+	if not (event is InputEventMouseButton):
+		return
+	var click := event as InputEventMouseButton
+	if not click.pressed or click.button_index != MOUSE_BUTTON_LEFT:
+		return
+	if hud.hovering_ui() or sim == null or sim.status != "running":
+		return
+	var hit: Dictionary = world.pick_ground(click.position)
+	if not bool(hit["ok"]):
+		return
+	var kind: String = hud.spawn_kind()
+	var pos: Vector3 = hit["pos"]
+	if sim.spawn_at(kind, pos):
+		_drain()
 
 
 func _packed_roster() -> Array:
@@ -748,6 +946,8 @@ func _parse_args() -> void:
 			catalog_dir = str(a).trim_prefix("--catalog=")
 		elif str(a).begins_with("--lands="):
 			lands_dir = str(a).trim_prefix("--lands=")
+		elif str(a).begins_with("--sandboxshot="):
+			sandbox_shot = str(a).trim_prefix("--sandboxshot=")
 
 
 func _has_arg(flag: String) -> bool:
@@ -796,6 +996,33 @@ func _shot_run() -> void:
 	for _i in 10:
 		await get_tree().process_frame
 	await _capture("05_result")
+	get_tree().quit(0)
+
+
+func _sandbox_shot_run() -> void:
+	for _i in 6:
+		await get_tree().process_frame
+	_on_sandbox()
+	for _i in 8:
+		await get_tree().process_frame
+	await _capture_to(sandbox_shot, "sandbox_setup")
+	_on_sandbox_arm()
+	formation = Defs.recommended(sandbox_map, _budget())
+	_refresh_build()
+	for _i in 6:
+		await get_tree().process_frame
+	await _capture_to(sandbox_shot, "sandbox_build")
+	_start_drive(_packed_roster())
+	for _i in 4:
+		await get_tree().process_frame
+	var hit: Dictionary = world.pick_ground(Vector2(780, 430))
+	if bool(hit.get("ok", false)):
+		var spot: Vector3 = hit["pos"]
+		sim.spawn_at(hud.spawn_kind(), spot)
+		world.sync(sim, 0.016)
+	for _i in 6:
+		await get_tree().process_frame
+	await _capture_to(sandbox_shot, "sandbox_drive")
 	get_tree().quit(0)
 
 

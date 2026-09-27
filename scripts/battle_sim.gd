@@ -21,6 +21,9 @@ var ambush_spawned: Array = []
 var finished_sent := false
 var next_id := 1
 var rng := RandomNumberGenerator.new()
+var sandbox := false
+var god_mode := false
+var threat := 1.0
 
 func start(p_level: Dictionary, roster: Array, p_route, combat_seed: int) -> void:
 	level = p_level
@@ -286,6 +289,17 @@ func _spawn_ambushes() -> void:
 			_spawn_enemy(sp, float(amb["at"]))
 
 
+func spawn_at(kind: String, pos: Vector3) -> bool:
+	if status != "running" or not Defs.ENEMIES.has(kind):
+		return false
+	var spec: Dictionary = Defs.ENEMIES[kind]
+	var air: bool = bool(spec["air"])
+	var placed := Vector3(pos.x, float(spec["alt"]) if air else 0.0, pos.z)
+	_append_enemy(kind, spec, placed)
+	events.append({"type": "banner", "text": "Contact — %s" % str(spec["name"])})
+	return true
+
+
 func _spawn_enemy(sp: Dictionary, at: float) -> void:
 	var kind := str(sp["k"])
 	var spec: Dictionary = Defs.ENEMIES[kind]
@@ -295,16 +309,22 @@ func _spawn_enemy(sp: Dictionary, at: float) -> void:
 	var pos: Vector3 = sm["pos"] + sm["right"] * lateral
 	var air: bool = bool(spec["air"])
 	pos.y = float(spec["alt"]) if air else 0.0
+	_append_enemy(kind, spec, pos)
+
+
+func _append_enemy(kind: String, spec: Dictionary, pos: Vector3) -> void:
+	var scale := maxf(threat, 0.15)
+	var hp := float(spec["hp"]) * scale
 	var e := {
 		"id": next_id,
 		"kind": kind,
-		"hp": float(spec["hp"]),
-		"max_hp": float(spec["hp"]),
-		"dmg": float(spec["dmg"]),
+		"hp": hp,
+		"max_hp": hp,
+		"dmg": float(spec["dmg"]) * scale,
 		"range": float(spec["rng"]),
 		"speed": float(spec["spd"]),
 		"rof": float(spec["rof"]),
-		"air": air,
+		"air": bool(spec["air"]),
 		"alt": float(spec["alt"]),
 		"pos": pos,
 		"cooldown": rng.randf_range(0.25, 0.7),
@@ -476,7 +496,7 @@ func _fire(attacker, target, src: Vector3, dst: Vector3, dmg: float, profile: St
 		"weapon": weapon,
 		"target_kind": str(target.get("kind", "")),
 	})
-	if not hit:
+	if not hit or (god_mode and team == "enemy"):
 		return
 	target["hp"] = float(target["hp"]) - dmg * rng.randf_range(0.92, 1.08)
 	if float(target["hp"]) <= 0.0:
@@ -540,7 +560,7 @@ func _check_end() -> void:
 		status = "lost"
 	elif cargo_left == 0:
 		status = "won" if delivered > 0 else "lost"
-	elif time > 240.0:
+	elif time > 240.0 and not sandbox:
 		status = "lost"
 	if status != "running" and not finished_sent:
 		finished_sent = true
