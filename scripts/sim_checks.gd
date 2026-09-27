@@ -86,6 +86,16 @@ static func run() -> bool:
 		if p.z > -0.4 or absf(p.x) > absf(p.z) * 0.45:
 			print("FAIL %s faces off axis x=%.2f z=%.2f" % [kind, p.x, p.z])
 			ok = false
+		if kind == "tank" or kind == "apc" or kind == "aa":
+			var hull := _mesh_size(node.get_node_or_null("body") as Node3D)
+			if hull.z < hull.x * 1.35:
+				print("FAIL %s hull is sideways x=%.2f z=%.2f" % [kind, hull.x, hull.z])
+				ok = false
+			var turret := node.get_node_or_null("turret") as Node3D
+			var muzzle := turret.get_node_or_null("muzzle") as Node3D if turret != null else null
+			if muzzle == null or muzzle.position.z > -0.4 or absf(muzzle.position.x) > 0.35:
+				print("FAIL %s gun does not point forward" % kind)
+				ok = false
 	var ied_level: Dictionary = levels[0].duplicate(true)
 	ied_level["ambushes"] = []
 	ied_level["length"] = 120.0
@@ -211,6 +221,37 @@ static func run() -> bool:
 
 	print("SIM CHECKS %s" % ("OK" if ok else "FAILED"))
 	return ok
+
+
+static func _mesh_size(node: Node3D) -> Vector3:
+	if node == null:
+		return Vector3.ZERO
+	var box := {"min": Vector3(1.0e9, 1.0e9, 1.0e9), "max": Vector3(-1.0e9, -1.0e9, -1.0e9), "n": 0}
+	_mesh_walk(node, Transform3D.IDENTITY, box, true)
+	if int(box["n"]) == 0:
+		return Vector3.ZERO
+	var min_v: Vector3 = box["min"]
+	var max_v: Vector3 = box["max"]
+	return max_v - min_v
+
+
+static func _mesh_walk(n: Node, parent_xf: Transform3D, box: Dictionary, skip_self: bool) -> void:
+	var xf := parent_xf
+	if n is Node3D and not skip_self:
+		xf = parent_xf * (n as Node3D).transform
+	if n is MeshInstance3D and (n as MeshInstance3D).mesh != null:
+		var aabb: AABB = (n as MeshInstance3D).mesh.get_aabb()
+		var min_v: Vector3 = box["min"]
+		var max_v: Vector3 = box["max"]
+		for i in 8:
+			var corner: Vector3 = xf * aabb.get_endpoint(i)
+			min_v = min_v.min(corner)
+			max_v = max_v.max(corner)
+		box["min"] = min_v
+		box["max"] = max_v
+		box["n"] = int(box["n"]) + 1
+	for c in n.get_children():
+		_mesh_walk(c, xf, box, false)
 
 
 static func _play(level: Dictionary, roster: Array, combat_seed: int, use_abilities: bool) -> Dictionary:
