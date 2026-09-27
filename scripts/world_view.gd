@@ -269,6 +269,44 @@ func show_column(slots: Array) -> void:
 	show_formation(slots, meshes.scheme, -1)
 
 
+func clear_actors() -> void:
+	for c in unit_root.get_children():
+		c.free()
+	for c in fx_root.get_children():
+		c.free()
+	unit_nodes.clear()
+	smoke_clouds.clear()
+	rings.clear()
+	fx_items.clear()
+	scorch_count = 0
+
+
+func pick_ground(screen: Vector2) -> Dictionary:
+	if cam == null:
+		return {"ok": false, "pos": Vector3.ZERO}
+	var origin := cam.project_ray_origin(screen)
+	var dir := cam.project_ray_normal(screen)
+	var prev := origin
+	var prev_ground := _height(prev.x, prev.z)
+	for i in 140:
+		var dist := 1.4 * float(i + 1)
+		if dist > 420.0:
+			break
+		var p := origin + dir * dist
+		var ground := _height(p.x, p.z)
+		if prev.y >= prev_ground and p.y <= ground:
+			return {"ok": true, "pos": Vector3(p.x, 0.0, p.z)}
+		prev = p
+		prev_ground = ground
+	if absf(dir.y) < 0.02:
+		return {"ok": false, "pos": Vector3.ZERO}
+	var t := (focus.y - origin.y) / dir.y
+	if t < 1.0 or t > 420.0:
+		return {"ok": false, "pos": Vector3.ZERO}
+	var hit := origin + dir * t
+	return {"ok": true, "pos": Vector3(hit.x, 0.0, hit.z)}
+
+
 func begin_drive() -> void:
 	camera_mode = "drive"
 	cam_ready = false

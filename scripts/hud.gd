@@ -26,6 +26,12 @@ signal name_changed(convoy_name: String)
 signal preset_save(preset_name: String)
 signal preset_load(preset_name: String)
 signal preset_delete(preset_name: String)
+signal sandbox_pressed
+signal sandbox_arm_pressed
+signal sandbox_god_toggled(on: bool)
+signal sandbox_speed_changed(speed: float)
+signal sandbox_threat_changed(scale: float)
+signal sandbox_restart_pressed
 
 var audio = null
 var root: Control
@@ -78,6 +84,25 @@ var result_title: Label
 var result_grade: Label
 var result_body: Label
 var result_next: Button
+var result_retry: Button
+var pause_retry: Button
+var sandbox_box: PanelContainer
+var sandbox_drive: PanelContainer
+var sandbox_map_buttons: Array = []
+var sandbox_map_index := 0
+var sandbox_spins := {}
+var sandbox_god: CheckBox
+var sandbox_diff: HSlider
+var sandbox_speed: HSlider
+var sandbox_diff_label: Label
+var sandbox_speed_label: Label
+var drive_god: CheckBox
+var drive_diff: HSlider
+var drive_speed: HSlider
+var drive_diff_label: Label
+var drive_speed_label: Label
+var spawn_pick: OptionButton
+var sandbox_sync := false
 
 func setup(p_audio) -> void:
 	audio = p_audio
@@ -88,6 +113,7 @@ func setup(p_audio) -> void:
 	root.theme = _theme()
 	add_child(root)
 	_build_menu()
+	_build_sandbox()
 	_build_help()
 	_build_brief()
 	_build_build()
@@ -152,7 +178,7 @@ func typing() -> bool:
 
 
 func hide_all() -> void:
-	for panel in [menu_box, help_box, brief_box, build_top, build_dock, build_bottom, drive_top, drive_bottom, pause_box, result_box]:
+	for panel in [menu_box, sandbox_box, sandbox_drive, help_box, brief_box, build_top, build_dock, build_bottom, drive_top, drive_bottom, pause_box, result_box]:
 		panel.visible = false
 	map.visible = false
 
@@ -173,6 +199,7 @@ func show_menu(bank: int, level_index: int, level_count: int, campaign_done: boo
 	else:
 		menu_sub.text = "Build the column. Drive the route. Deliver the cargo."
 		_menu_button("Campaign", play_pressed)
+	_menu_button("Sandbox", sandbox_pressed)
 	_menu_button("How to Play", help_pressed)
 	_menu_button("Quit", quit_pressed)
 
@@ -205,17 +232,22 @@ func show_build(level: Dictionary, bank: int, units: Array, kind: String, p_rout
 	build_title.text = "%s  ·  %s" % [str(level["name"]).to_upper(), convoy.to_upper()]
 	var cost := Defs.roster_cost(units)
 	var cargo := Defs.count_kind(units, "cargo")
-	build_budget.text = "Budget  $%d" % bank
-	build_column.text = "Formation  $%d    left  $%d    vehicles  %d/%d    cargo  %d" % [cost, bank - cost, units.size(), Defs.MAX_UNITS, cargo]
+	var unlimited := bool(state.get("unlimited", false))
+	if unlimited:
+		build_budget.text = "Budget  unlimited"
+		build_column.text = "Formation  $%d    vehicles  %d/%d    cargo  %d" % [cost, units.size(), Defs.MAX_UNITS, cargo]
+	else:
+		build_budget.text = "Budget  $%d" % bank
+		build_column.text = "Formation  $%d    left  $%d    vehicles  %d/%d    cargo  %d" % [cost, bank - cost, units.size(), Defs.MAX_UNITS, cargo]
 	var warn := ""
 	if cargo == 0:
 		warn = "Place at least one cargo truck."
-	elif cost > bank:
+	elif not unlimited and cost > bank:
 		warn = "That formation costs more than the budget."
 	elif Defs.cargo_is_leading(units):
 		warn = "Cargo is ahead of the guns. It will take the first hits."
 	build_warn.text = warn
-	deploy_button.disabled = cargo == 0 or cost > bank
+	deploy_button.disabled = cargo == 0 or (not unlimited and cost > bank)
 	for key in cards:
 		var btn: Button = cards[key]
 		if key == kind:
@@ -236,11 +268,19 @@ func show_build(level: Dictionary, bank: int, units: Array, kind: String, p_rout
 		map.set_state(p_route, blips, 0.0)
 
 
-func show_drive() -> void:
+func show_drive(sandbox_mode: bool = false) -> void:
 	hide_all()
 	drive_top.visible = true
 	drive_bottom.visible = true
 	map.visible = true
+	sandbox_drive.visible = sandbox_mode
+	if sandbox_mode:
+		sandbox_sync = true
+		drive_god.button_pressed = sandbox_god.button_pressed
+		drive_diff.value = sandbox_diff.value
+		drive_speed.value = sandbox_speed.value
+		sandbox_sync = false
+		_refresh_sandbox_readout()
 
 
 func refresh_drive(sim, p_route) -> void:
@@ -271,7 +311,10 @@ func refresh_drive(sim, p_route) -> void:
 	drive_cargo.text = cargo_text
 	drive_hp.text = "Column  %d%%" % int(100.0 * hp / maxf(mx, 1.0))
 	drive_hostiles.text = "Hostiles  %d" % sim.living_hostiles()
-	if sim.smoke_timer > 0.0:
+	if bool(sim.sandbox):
+		var god_note := "    God mode" if bool(sim.god_mode) else ""
+		drive_hint.text = "Left click the ground to spawn" + god_note
+	elif sim.smoke_timer > 0.0:
 		drive_hint.text = "Smoke is up"
 	else:
 		drive_hint.text = "Q smoke    E airstrike    R repair"
@@ -330,8 +373,19 @@ func show_results(payload: Dictionary) -> void:
 	else:
 		lines.append("No payout. War chest stays $%d." % int(payload["bank"]))
 		lines.append("Retry with a tougher column, or spend smoke when the radio calls contact.")
+	if bool(payload.get("sandbox", false)):
+		lines.clear()
+		lines.append("%s" % payload["level_name"])
+		lines.append("Delivered  %d / %d cargo" % [payload["delivered"], payload["cargo_total"]])
+		lines.append("Hostiles destroyed  %d" % payload["kills"])
+		lines.append("Escorts lost  %d" % payload["escorts_lost"])
+		lines.append("Time  %ds" % int(payload["time"]))
+		lines.append("")
+		lines.append("Sandbox run. Campaign progress was not changed.")
 	result_body.text = "\n".join(lines)
-	if won and not bool(payload["last"]):
+	if bool(payload.get("sandbox", false)):
+		result_next.visible = false
+	elif won and not bool(payload["last"]):
 		result_next.text = "Next Mission"
 		result_next.visible = true
 	elif won:
@@ -390,6 +444,282 @@ func _build_menu() -> void:
 	box.add_child(foot)
 
 
+func show_sandbox() -> void:
+	hide_all()
+	sandbox_box.visible = true
+	_mark_sandbox_map(sandbox_map_index)
+	_refresh_sandbox_readout()
+
+
+func sandbox_settings() -> Dictionary:
+	var counts := {}
+	for kind in sandbox_spins.keys():
+		var spin: SpinBox = sandbox_spins[kind]
+		counts[str(kind)] = int(spin.value)
+	return {
+		"map": sandbox_map_index,
+		"counts": counts,
+		"god": sandbox_god.button_pressed,
+		"threat": sandbox_diff.value / 100.0,
+		"speed": sandbox_speed.value / 100.0,
+	}
+
+
+func spawn_kind() -> String:
+	var kinds := ["infantry", "technical", "rpg", "tank", "heli"]
+	var idx := spawn_pick.selected
+	if idx < 0 or idx >= kinds.size():
+		return "infantry"
+	return kinds[idx]
+
+
+func set_sandbox_chrome(on: bool) -> void:
+	pause_retry.text = "Restart Drive" if on else "Retry Mission"
+	result_retry.text = "Restart" if on else "Retry"
+
+
+func _build_sandbox() -> void:
+	sandbox_box = PanelContainer.new()
+	sandbox_box.set_anchors_preset(Control.PRESET_CENTER)
+	sandbox_box.offset_left = -430
+	sandbox_box.offset_right = 430
+	sandbox_box.offset_top = -330
+	sandbox_box.offset_bottom = 330
+	sandbox_box.add_theme_stylebox_override("panel", _style(Color(0.07, 0.08, 0.06, 0.94), Color(0.55, 0.48, 0.28), 10))
+	root.add_child(sandbox_box)
+	var outer := VBoxContainer.new()
+	outer.add_theme_constant_override("separation", 8)
+	sandbox_box.add_child(outer)
+	var title := Label.new()
+	title.text = "SANDBOX"
+	title.add_theme_font_size_override("font_size", 28)
+	outer.add_child(title)
+	var blurb := Label.new()
+	blurb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	blurb.text = "Unlimited budget. Every unit and upgrade is available. This run does not change the campaign."
+	outer.add_child(blurb)
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, 460)
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	outer.add_child(scroll)
+	var body := VBoxContainer.new()
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("separation", 8)
+	scroll.add_child(body)
+	body.add_child(_sandbox_heading("Map"))
+	var maps := HBoxContainer.new()
+	maps.add_theme_constant_override("separation", 8)
+	body.add_child(maps)
+	var map_names := ["Dust Road", "Pine Cut", "High Pass"]
+	for i in map_names.size():
+		var map_btn := Button.new()
+		map_btn.text = map_names[i]
+		map_btn.custom_minimum_size = Vector2(150, 36)
+		map_btn.pressed.connect(_mark_sandbox_map.bind(i))
+		maps.add_child(map_btn)
+		sandbox_map_buttons.append(map_btn)
+	body.add_child(_sandbox_heading("Attackers"))
+	var attackers := [
+		["infantry", "Infantry", 4],
+		["technical", "Technical", 2],
+		["rpg", "RPG team", 1],
+		["tank", "Tank", 0],
+		["heli", "Helicopter", 0],
+	]
+	for spec in attackers:
+		var row := HBoxContainer.new()
+		var name := Label.new()
+		name.text = str(spec[1])
+		name.custom_minimum_size = Vector2(160, 0)
+		name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(name)
+		var spin := SpinBox.new()
+		spin.min_value = 0
+		spin.max_value = 30
+		spin.step = 1
+		spin.value = float(spec[2])
+		spin.rounded = true
+		spin.custom_minimum_size = Vector2(110, 0)
+		row.add_child(spin)
+		body.add_child(row)
+		sandbox_spins[str(spec[0])] = spin
+	body.add_child(_sandbox_heading("Difficulty"))
+	sandbox_diff_label = Label.new()
+	sandbox_diff_label.text = "Difficulty  100%"
+	body.add_child(sandbox_diff_label)
+	sandbox_diff = HSlider.new()
+	sandbox_diff.min_value = 50
+	sandbox_diff.max_value = 250
+	sandbox_diff.step = 5
+	sandbox_diff.value = 100
+	sandbox_diff.custom_minimum_size = Vector2(0, 22)
+	sandbox_diff.value_changed.connect(_on_setup_diff)
+	body.add_child(sandbox_diff)
+	var presets := HBoxContainer.new()
+	presets.add_theme_constant_override("separation", 8)
+	body.add_child(presets)
+	for preset in [["Easy", 60.0], ["Normal", 100.0], ["Hard", 150.0], ["Brutal", 220.0]]:
+		var preset_btn := Button.new()
+		preset_btn.text = str(preset[0])
+		preset_btn.custom_minimum_size = Vector2(110, 34)
+		preset_btn.pressed.connect(_set_setup_diff.bind(float(preset[1])))
+		presets.add_child(preset_btn)
+	sandbox_god = CheckBox.new()
+	sandbox_god.text = "God mode — the convoy cannot be hurt"
+	body.add_child(sandbox_god)
+	body.add_child(_sandbox_heading("Game speed"))
+	sandbox_speed_label = Label.new()
+	sandbox_speed_label.text = "Speed  1.00x"
+	body.add_child(sandbox_speed_label)
+	sandbox_speed = HSlider.new()
+	sandbox_speed.min_value = 25
+	sandbox_speed.max_value = 300
+	sandbox_speed.step = 5
+	sandbox_speed.value = 100
+	sandbox_speed.custom_minimum_size = Vector2(0, 22)
+	sandbox_speed.value_changed.connect(_on_setup_speed)
+	body.add_child(sandbox_speed)
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 8)
+	outer.add_child(actions)
+	actions.add_child(_button("Arm Column", sandbox_arm_pressed))
+	actions.add_child(_button("Back", back_pressed))
+	_build_sandbox_drive()
+
+
+func _build_sandbox_drive() -> void:
+	sandbox_drive = PanelContainer.new()
+	sandbox_drive.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	sandbox_drive.offset_left = 16
+	sandbox_drive.offset_top = 108
+	sandbox_drive.offset_right = 300
+	sandbox_drive.offset_bottom = 470
+	sandbox_drive.add_theme_stylebox_override("panel", _style(Color(0.07, 0.08, 0.06, 0.86), Color(0.55, 0.48, 0.28), 8))
+	root.add_child(sandbox_drive)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+	sandbox_drive.add_child(box)
+	var heading := Label.new()
+	heading.text = "SANDBOX"
+	heading.add_theme_color_override("font_color", Color("e2b84a"))
+	box.add_child(heading)
+	drive_god = CheckBox.new()
+	drive_god.text = "God mode"
+	drive_god.toggled.connect(_on_drive_god)
+	box.add_child(drive_god)
+	drive_diff_label = Label.new()
+	drive_diff_label.text = "Difficulty  100%"
+	box.add_child(drive_diff_label)
+	drive_diff = HSlider.new()
+	drive_diff.min_value = 50
+	drive_diff.max_value = 250
+	drive_diff.step = 5
+	drive_diff.value = 100
+	drive_diff.custom_minimum_size = Vector2(0, 18)
+	drive_diff.value_changed.connect(_on_drive_diff)
+	box.add_child(drive_diff)
+	drive_speed_label = Label.new()
+	drive_speed_label.text = "Speed  1.00x"
+	box.add_child(drive_speed_label)
+	drive_speed = HSlider.new()
+	drive_speed.min_value = 25
+	drive_speed.max_value = 300
+	drive_speed.step = 5
+	drive_speed.value = 100
+	drive_speed.custom_minimum_size = Vector2(0, 18)
+	drive_speed.value_changed.connect(_on_drive_speed)
+	box.add_child(drive_speed)
+	var spawn_label := Label.new()
+	spawn_label.text = "Spawn on left click"
+	box.add_child(spawn_label)
+	spawn_pick = OptionButton.new()
+	spawn_pick.add_item("Infantry")
+	spawn_pick.add_item("Technical")
+	spawn_pick.add_item("RPG team")
+	spawn_pick.add_item("Tank")
+	spawn_pick.add_item("Helicopter")
+	box.add_child(spawn_pick)
+	var restart := Button.new()
+	restart.text = "Restart Drive"
+	restart.pressed.connect(func() -> void:
+		if audio:
+			audio.play("ui_click", -4.0)
+		sandbox_restart_pressed.emit()
+	)
+	box.add_child(restart)
+
+
+func _sandbox_heading(text: String) -> Label:
+	var label := Label.new()
+	label.text = text.to_upper()
+	label.add_theme_color_override("font_color", Color("e2b84a"))
+	label.add_theme_font_size_override("font_size", 13)
+	return label
+
+
+func _mark_sandbox_map(index: int) -> void:
+	sandbox_map_index = index
+	for i in sandbox_map_buttons.size():
+		var btn: Button = sandbox_map_buttons[i]
+		if i == index:
+			btn.add_theme_stylebox_override("normal", _style(Color("3a3420"), Color("e2b84a"), 6))
+		else:
+			btn.add_theme_stylebox_override("normal", _style(Color("24281c"), Color("5a5340"), 6))
+
+
+func _set_setup_diff(value: float) -> void:
+	sandbox_diff.value = value
+
+
+func _on_setup_diff(value: float) -> void:
+	sandbox_diff_label.text = "Difficulty  %d%%" % int(value)
+	if sandbox_sync:
+		return
+	sandbox_sync = true
+	drive_diff.value = value
+	sandbox_sync = false
+	_refresh_sandbox_readout()
+	sandbox_threat_changed.emit(value / 100.0)
+
+
+func _on_setup_speed(value: float) -> void:
+	sandbox_speed_label.text = "Speed  %.2fx" % (value / 100.0)
+
+
+func _on_drive_god(on: bool) -> void:
+	if sandbox_sync:
+		return
+	sandbox_god.button_pressed = on
+	sandbox_god_toggled.emit(on)
+
+
+func _on_drive_diff(value: float) -> void:
+	if sandbox_sync:
+		return
+	sandbox_sync = true
+	sandbox_diff.value = value
+	sandbox_sync = false
+	sandbox_diff_label.text = "Difficulty  %d%%" % int(value)
+	drive_diff_label.text = "Difficulty  %d%%" % int(value)
+	sandbox_threat_changed.emit(value / 100.0)
+
+
+func _on_drive_speed(value: float) -> void:
+	if sandbox_sync:
+		return
+	sandbox_speed.value = value
+	sandbox_speed_label.text = "Speed  %.2fx" % (value / 100.0)
+	drive_speed_label.text = "Speed  %.2fx" % (value / 100.0)
+	sandbox_speed_changed.emit(value / 100.0)
+
+
+func _refresh_sandbox_readout() -> void:
+	sandbox_diff_label.text = "Difficulty  %d%%" % int(sandbox_diff.value)
+	sandbox_speed_label.text = "Speed  %.2fx" % (sandbox_speed.value / 100.0)
+	drive_diff_label.text = "Difficulty  %d%%" % int(drive_diff.value)
+	drive_speed_label.text = "Speed  %.2fx" % (drive_speed.value / 100.0)
+
+
 func _build_help() -> void:
 	help_box = PanelContainer.new()
 	help_box.set_anchors_preset(Control.PRESET_CENTER)
@@ -408,7 +738,7 @@ func _build_help() -> void:
 	box.add_child(title)
 	help_body = Label.new()
 	help_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	help_body.text = "Arm a formation, then ride it to the drop.\n\nBuild\n1–6 pick a unit. Left click an empty grid cell to place it. Left click a vehicle to select it, then drag it to another cell. Right click removes it. R rotates the selected vehicle. Q fills a suggested wedge. Enter deploys.\nThe grid is five lanes by eight rows. The formation keeps that shape on the road.\nName the convoy, pick a camo, and upgrade armor, weapon, or speed on the selected vehicle. Save a preset and load it later.\nYou need at least one cargo truck. Flank the cargo or put guns ahead of it. Anti-air is for helicopters. The repair truck heals whoever is hurting, cargo first.\n\nDrive\nGuns fire on their own. Right-drag orbits the camera, the wheel zooms, F snaps back. A/D orbit, W/S zoom.\nQ smoke — thick cover, hostiles miss more.\nE airstrike — a jet, then a blast on the densest group. It does not hit your trucks.\nR field repair — a burst of healing.\nEsc pauses.\n\nDeliver at least one cargo truck. Lose if they all die. Pay rolls into the next mission's budget."
+	help_body.text = "Arm a formation, then ride it to the drop.\n\nBuild\n1–6 pick a unit. Left click an empty grid cell to place it. Left click a vehicle to select it, then drag it to another cell. Right click removes it. R rotates the selected vehicle. Q fills a suggested wedge. Enter deploys.\nThe grid is five lanes by eight rows. The formation keeps that shape on the road.\nName the convoy, pick a camo, and upgrade armor, weapon, or speed on the selected vehicle. Save a preset and load it later.\nYou need at least one cargo truck. Flank the cargo or put guns ahead of it. Anti-air is for helicopters. The repair truck heals whoever is hurting, cargo first.\n\nDrive\nGuns fire on their own. Right-drag orbits the camera, the wheel zooms, F snaps back. A/D orbit, W/S zoom.\nQ smoke — thick cover, hostiles miss more.\nE airstrike — a jet, then a blast on the densest group. It does not hit your trucks.\nR field repair — a burst of healing.\nEsc pauses.\n\nDeliver at least one cargo truck. Lose if they all die. Pay rolls into the next mission's budget.\n\nSandbox, from the main menu, gives an unlimited budget on any map. Choose the attackers, a difficulty, god mode, and the game speed. Left click spawns a hostile. Restart Drive runs the same column again. Sandbox does not change the campaign."
 	box.add_child(help_body)
 	box.add_child(_button("Back", back_pressed))
 
@@ -731,7 +1061,8 @@ func _build_pause() -> void:
 	title.add_theme_font_size_override("font_size", 28)
 	box.add_child(title)
 	box.add_child(_button("Resume", resume_pressed))
-	box.add_child(_button("Retry Mission", retry_pressed))
+	pause_retry = _button("Retry Mission", retry_pressed)
+	box.add_child(pause_retry)
 	box.add_child(_button("Main Menu", menu_pressed))
 
 
@@ -763,7 +1094,8 @@ func _build_results() -> void:
 	box.add_child(row)
 	result_next = _button("Next Mission", next_pressed)
 	row.add_child(result_next)
-	row.add_child(_button("Retry", retry_pressed))
+	result_retry = _button("Retry", retry_pressed)
+	row.add_child(result_retry)
 	row.add_child(_button("Menu", menu_pressed))
 
 

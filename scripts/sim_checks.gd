@@ -97,6 +97,39 @@ static func run() -> bool:
 		if lonely["status"] != "lost":
 			ok = false
 
+	print("--- sandbox god mode ignores enemy fire ---")
+	var sand_level: Dictionary = levels[0].duplicate(true)
+	sand_level["ambushes"] = []
+	sand_level["charges"] = {"smoke": 1, "airstrike": 1, "repair": 1}
+	var sand_route = RouteScript.new(sand_level)
+	var sand = SimScript.new()
+	sand.sandbox = true
+	sand.god_mode = true
+	sand.threat = 2.0
+	sand.start(sand_level, [Defs.make_unit("cargo", Defs.CENTER, 2)], sand_route, 1107)
+	var origin: Vector3 = sand.friendlies[0]["pos"]
+	var spawned: bool = sand.spawn_at("tank", origin + Vector3(10, 0, 0))
+	if not spawned:
+		print("FAIL sandbox spawn")
+		ok = false
+	for _n in 90:
+		sand.tick(1.0 / 30.0)
+		sand.events.clear()
+	var cargo_hp := float(sand.friendlies[0]["hp"])
+	var tank_hp := float(sand.enemies[0]["max_hp"]) if sand.enemies.size() > 0 else 0.0
+	if cargo_hp < float(sand.friendlies[0]["max_hp"]) - 0.01:
+		print("FAIL god mode took damage %.1f" % cargo_hp)
+		ok = false
+	if tank_hp < 640.0:
+		print("FAIL threat did not scale tank hp %.1f" % tank_hp)
+		ok = false
+	sand.time = 250.0
+	sand.tick(1.0 / 30.0)
+	if sand.status != "running":
+		print("FAIL sandbox ended on the campaign timer (%s)" % sand.status)
+		ok = false
+	print("sandbox cargo_hp=%.0f tank_hp=%.0f status=%s" % [cargo_hp, tank_hp, sand.status])
+
 	print("SIM CHECKS %s" % ("OK" if ok else "FAILED"))
 	return ok
 
