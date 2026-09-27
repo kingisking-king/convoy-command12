@@ -1034,28 +1034,34 @@ func _lands_run() -> void:
 		var built = RouteScript.new(level)
 		route = built
 		world.show_level(level, built)
-		world.camera_mode = "vista"
 		for body in world.slot_bodies:
 			body.visible = false
-		var dist := 150.0
-		var marks: PackedByteArray = world.grade_bridge
-		for i in marks.size():
-			if marks[i] == 0:
-				continue
-			var mark := float(world.grade_origin) + float(i) * float(world.grade_step)
-			if mark > 100.0 and mark < float(built.total) - 80.0:
-				dist = mark
-				break
+		var dist := 220.0
+		if float(built.total) < 280.0:
+			dist = float(built.total) * 0.45
+		var camo := Defs.camo_for_biome(str(level["biome"]))
+		var parade := ["tank", "humvee", "cargo"]
+		for i in parade.size():
+			var unit: Node3D = world.meshes.build(str(parade[i]), false, camo)
+			world.unit_root.add_child(unit)
+			var along := dist - float(i) * 9.0
+			var pose: Dictionary = built.sample(along)
+			var spot: Vector3 = pose["pos"]
+			spot.y = world.road_height(along) + 0.05
+			unit.position = spot
+			var face: Vector3 = pose["dir"]
+			world._face_along(unit, face, world._grade_pitch(along))
 		var sm: Dictionary = built.sample(dist)
-		var right: Vector3 = sm["right"]
-		var ahead: Vector3 = sm["dir"]
-		var eye: Vector3 = sm["pos"] - ahead * 12.0 - right * 32.0
-		eye.y = world._height(eye.x, eye.z) + 8.0
-		var look: Vector3 = sm["pos"] + ahead * 48.0
-		look.y = world.road_height(dist + 48.0) + 1.2
-		world.cam.global_position = eye
-		world.cam.look_at(look, Vector3.UP)
+		world.camera_mode = "drive"
+		world.yaw = 0.42
+		world.pitch = 0.4
+		world.dist = 36.0
+		world.cam_ready = false
+		world.focus = sm["pos"]
+		world.focus.y = world.road_height(dist)
+		world.travel_dir = sm["dir"]
 		for _j in 8:
+			world.tick(0.05)
 			await get_tree().process_frame
 		await _capture_to(lands_dir, "land_%s" % str(level["biome"]))
 	get_tree().quit(0)
@@ -1067,6 +1073,15 @@ func _catalog_run() -> void:
 	world.meshes.scheme = "desert"
 	if world.menu_root:
 		world.menu_root.visible = false
+	var stage := MeshInstance3D.new()
+	var disc := CylinderMesh.new()
+	disc.top_radius = 14.0
+	disc.bottom_radius = 14.0
+	disc.height = 0.3
+	stage.mesh = disc
+	stage.position = Vector3(0, -0.16, 0)
+	stage.material_override = world.meshes.mat(Color(0.45, 0.36, 0.22))
+	world.add_child(stage)
 	var kinds: Array = ["cargo", "humvee", "apc", "tank", "aa", "repair", "technical", "infantry", "rpg", "heli"]
 	for kind in kinds:
 		var enemy: bool = kind == "technical" or kind == "infantry" or kind == "rpg" or kind == "heli"
