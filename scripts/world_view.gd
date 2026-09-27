@@ -40,6 +40,13 @@ var ghost: Node3D
 var smoke_clouds := {}
 var scorch_count := 0
 var shadows_on := true
+var land_seed := 1
+var grade := PackedFloat32Array()
+var grade_bridge := PackedByteArray()
+var grade_origin := -64.0
+var grade_step := 8.0
+var water_y := -3.0
+var ground_grain: Texture2D
 
 func setup() -> void:
 	pad_empty = _pad_mat(Color(0.78, 0.66, 0.38, 0.55))
@@ -141,6 +148,7 @@ func show_level(level: Dictionary, p_route) -> void:
 	dist = 44.0
 	route = p_route
 	biome = str(level["biome"])
+	land_seed = int(level["seed"])
 	if menu_root:
 		menu_root.queue_free()
 		menu_root = null
@@ -154,6 +162,7 @@ func show_level(level: Dictionary, p_route) -> void:
 	_build_slots()
 	var sm: Dictionary = route.sample(-20.0)
 	focus = sm["pos"]
+	focus.y = road_height(-20.0)
 	travel_dir = sm["dir"]
 
 
@@ -181,13 +190,12 @@ func show_formation(units: Array, camo: String, selected: int) -> void:
 		var lane := int(entry.get("lane", Defs.CENTER))
 		var row := int(entry.get("row", 0))
 		var yaw_deg := int(entry.get("yaw", 0))
-		var placed := _cell_pose(lane, row, yaw_deg)
+		var placed: Dictionary = _cell_pose(lane, row, yaw_deg)
 		var node := meshes.build(kind, false, camo)
 		preview_root.add_child(node)
 		node.position = placed["pos"]
-		var look: Vector3 = placed["pos"] + placed["dir"]
-		if look.distance_to(node.position) > 0.1:
-			node.look_at(look, Vector3.UP)
+		var face_dir: Vector3 = placed["dir"]
+		_face_along(node, face_dir, float(placed["pitch"]))
 		var key := _cell_key(lane, row)
 		if cell_pad.has(key):
 			var mark: MeshInstance3D = cell_pad[key]
@@ -213,11 +221,10 @@ func set_ghost(kind: String, cell: Vector2i, ok: bool, camo: String) -> void:
 	if bool(ghost.get_meta("ok", true)) != ok:
 		ghost.set_meta("ok", ok)
 		_ghost_tint(ghost, ok)
-	var placed := _cell_pose(cell.x, cell.y, 0)
+	var placed: Dictionary = _cell_pose(cell.x, cell.y, 0)
 	ghost.position = placed["pos"] + Vector3(0, 0.15, 0)
-	var look: Vector3 = ghost.position + placed["dir"]
-	if look.distance_to(ghost.position) > 0.1:
-		ghost.look_at(look, Vector3.UP)
+	var face_dir: Vector3 = placed["dir"]
+	_face_along(ghost, face_dir, float(placed["pitch"]))
 
 
 func set_cell_hover(cell: Vector2i, mode: String) -> void:
@@ -284,12 +291,11 @@ func sync(sim, dt: float) -> void:
 		seen[int(u["id"])] = true
 		var node := _ensure_actor(int(u["id"]), str(u["kind"]), false, 2.3 if u["role"] == "cargo" else 2.0, _friendly_bar_color(u))
 		var pos: Vector3 = u["pos"]
-		node.position = pos
+		node.position = Vector3(pos.x, road_height(float(u["s"])) + 0.04, pos.z)
 		var alive: bool = bool(u["alive"])
 		if alive:
-			var face: Vector3 = pos + u["dir"]
-			if face.distance_to(pos) > 0.05:
-				node.look_at(face, Vector3.UP)
+			var face_dir: Vector3 = u["dir"]
+			_face_along(node, face_dir, _grade_pitch(float(u["s"])))
 			_spin(node, dt, bool(u["moving"]))
 			_aim(node, u, sim, dt)
 			_set_emitting(node, "dust", bool(u["moving"]) and not bool(u["delivered"]))
@@ -310,7 +316,11 @@ func sync(sim, dt: float) -> void:
 	for e in sim.enemies:
 		seen[int(e["id"])] = true
 		var node_e := _ensure_actor(int(e["id"]), str(e["kind"]), true, 1.6 if e["kind"] == "infantry" or e["kind"] == "rpg" else 2.1, Color("e15b4c"))
-		node_e.position = e["pos"]
+		var enemy_pos: Vector3 = e["pos"]
+		if bool(e["air"]):
+			node_e.position = Vector3(enemy_pos.x, _height(enemy_pos.x, enemy_pos.z) + float(e["alt"]), enemy_pos.z)
+		else:
+			node_e.position = Vector3(enemy_pos.x, _height(enemy_pos.x, enemy_pos.z) + 0.04, enemy_pos.z)
 		var enemy_alive: bool = bool(e["alive"])
 		if enemy_alive:
 			_spin(node_e, dt, not bool(e["air"]))
@@ -331,11 +341,21 @@ func sync(sim, dt: float) -> void:
 		if not e["alive"]:
 			_wreck(node_e)
 		elif count > 0:
-			var flat := Vector3(focus.x - e["pos"].x, 0, focus.z - e["pos"].z)
+			var flat := Vector3(focus.x - enemy_pos.x, 0.0, focus.z - enemy_pos.z)
 			if flat.length() > 0.2:
-				node_e.look_at(node_e.position + flat.normalized(), Vector3.UP)
+				if bool(e["air"]):
+					var aim := Vector3(focus.x, focus.y + 1.2, focus.z)
+					if node_e.global_position.distance_to(aim) > 0.3:
+						node_e.look_at(aim, Vector3.UP)
+				else:
+					_face_along(node_e, flat, _slope_pitch(node_e.position, flat.normalized()))
 	if count > 0:
 		focus = acc / float(count)
+		if route != null:
+			var focus_proj: Dictionary = route.project(focus)
+			focus.y = road_height(float(focus_proj["dist"]))
+		else:
+			focus.y = 0.0
 		if dir_acc.length() > 0.1:
 			travel_dir = dir_acc.normalized()
 	_sync_smoke(sim)
@@ -401,7 +421,8 @@ func _frame_build(dt: float) -> void:
 	if route == null:
 		return
 	var sm: Dictionary = route.sample(-20.0)
-	var anchor: Vector3 = sm["pos"] + Vector3(0, 1.0, 0)
+	var anchor: Vector3 = sm["pos"]
+	anchor.y = road_height(-20.0) + 1.4
 	var behind: Vector3 = -sm["dir"]
 	var swung: Vector3 = Basis(Vector3.UP, yaw) * behind
 	swung.y = 0.0
@@ -410,7 +431,7 @@ func _frame_build(dt: float) -> void:
 	swung = swung.normalized()
 	var elev := clampf(pitch, 0.22, 1.2)
 	var offset := swung * cos(elev) * dist + Vector3.UP * sin(elev) * dist
-	_glide(anchor + offset, anchor, dt)
+	_glide(_keep_above(anchor + offset), anchor, dt)
 
 
 func _frame_drive(dt: float) -> void:
@@ -425,7 +446,7 @@ func _frame_drive(dt: float) -> void:
 	back = back.normalized()
 	var look := focus + Vector3(0, 1.5, 0)
 	var offset := back * cos(elev) * dist + Vector3.UP * sin(elev) * dist
-	_glide(look + offset, look, dt)
+	_glide(_keep_above(look + offset), look, dt)
 
 
 func _glide(pos: Vector3, look: Vector3, dt: float) -> void:
@@ -503,7 +524,9 @@ func _aim(node: Node3D, u, sim, dt: float) -> void:
 			break
 	if target == null:
 		return
-	var local_target: Vector3 = node.to_local(target["pos"])
+	var tp: Vector3 = target["pos"]
+	var aim_y := _height(tp.x, tp.z) + (float(target["alt"]) if bool(target["air"]) else 1.1)
+	var local_target: Vector3 = node.to_local(Vector3(tp.x, aim_y, tp.z))
 	if local_target.length() < 0.2:
 		return
 	if absf(local_target.normalized().dot(Vector3.UP)) > 0.96:
@@ -576,6 +599,8 @@ func _friendly_bar_color(u) -> Color:
 
 
 func _tracer(a: Vector3, b: Vector3, color: Color, weapon: String) -> void:
+	a = _lift(a)
+	b = _lift(b)
 	var len := a.distance_to(b)
 	if len < 0.05:
 		return
@@ -626,6 +651,7 @@ func _tracer(a: Vector3, b: Vector3, color: Color, weapon: String) -> void:
 
 
 func _impact(pos: Vector3, weapon: String) -> void:
+	pos = _lift(pos)
 	var spark := weapon == "shell" or weapon == "rocket"
 	var parts := _billow(Color(1.0, 0.72, 0.35, 0.9) if spark else Color(0.62, 0.5, 0.34, 0.55), 8 if spark else 10, 0.35, spark)
 	parts.one_shot = true
@@ -643,6 +669,7 @@ func _impact(pos: Vector3, weapon: String) -> void:
 
 
 func _explosion(pos: Vector3, big: bool, strike: bool = false) -> void:
+	pos = _lift(pos)
 	var radius := 2.4 if strike else (1.3 if big else 0.7)
 	var flash := MeshInstance3D.new()
 	var sph := SphereMesh.new()
@@ -766,7 +793,8 @@ func _sync_smoke(sim) -> void:
 				smoke_clouds[id] = cloud
 			var puff: CPUParticles3D = smoke_clouds[id]
 			puff.emitting = true
-			puff.global_position = u["pos"] + Vector3(0, 1.4, 0)
+			var smoke_y := road_height(float(u["s"])) + 1.6
+			puff.global_position = Vector3(u["pos"].x, smoke_y, u["pos"].z)
 	for id in smoke_clouds.keys():
 		if not seen.has(id) and is_instance_valid(smoke_clouds[id]):
 			(smoke_clouds[id] as CPUParticles3D).emitting = false
@@ -809,7 +837,7 @@ func _sync_strikes(sim) -> void:
 		var marker: Node3D = rings[i]
 		marker.visible = true
 		var p: Vector3 = strike["pos"]
-		marker.position = Vector3(p.x, 0.35, p.z)
+		marker.position = Vector3(p.x, _height(p.x, p.z) + 0.35, p.z)
 		var eta := float(strike["eta"])
 		var travel := clampf(eta / 1.15, 0.0, 1.0)
 		var jet: Node3D = marker.get_node_or_null("jet")
@@ -843,7 +871,7 @@ func _scorch(pos: Vector3, radius: float) -> void:
 	cyl.height = 0.04
 	cyl.radial_segments = 16
 	mi.mesh = cyl
-	mi.position = Vector3(pos.x, 0.18, pos.z)
+	mi.position = Vector3(pos.x, _height(pos.x, pos.z) + 0.2, pos.z)
 	var m := StandardMaterial3D.new()
 	m.albedo_color = Color(0.08, 0.07, 0.06, 0.72)
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -904,10 +932,12 @@ func _cell_key(lane: int, row: int) -> String:
 
 
 func _cell_pose(lane: int, row: int, yaw_deg: int) -> Dictionary:
-	var sm: Dictionary = route.sample(Defs.along(row))
+	var along := Defs.along(row)
+	var sm: Dictionary = route.sample(along)
 	var pos: Vector3 = sm["pos"] + sm["right"] * Defs.lateral(lane)
+	pos.y = road_height(along) + 0.05
 	var dir: Vector3 = Basis(Vector3.UP, deg_to_rad(float(yaw_deg))) * sm["dir"]
-	return {"pos": pos, "dir": dir}
+	return {"pos": pos, "dir": dir, "pitch": _grade_pitch(along)}
 
 
 func _ghost_tint(node: Node3D, ok: bool) -> void:
@@ -954,137 +984,441 @@ func _apply_biome(which: String) -> void:
 	var env := Environment.new()
 	var sky := Sky.new()
 	var mat := ProceduralSkyMaterial.new()
-	var top := Color("6ea4c8")
-	var horizon := Color("e7c7a2")
-	var ground := Color("c4a06a")
-	var fog := Color("e0c39a")
-	var density := 0.0028
+	var top := Color(0.24, 0.42, 0.62)
+	var horizon := Color(0.95, 0.58, 0.32)
+	var ground := Color(0.72, 0.48, 0.28)
+	var fog := Color(0.91, 0.68, 0.42)
+	var density := 0.0038
+	var sun_rot := Vector3(-14.0, -62.0, 0.0)
+	var sun_col := Color(1.0, 0.64, 0.34)
+	var sun_energy := 1.32
+	var fill_col := Color(0.48, 0.55, 0.78)
+	var fill_energy := 0.26
+	var exposure := 1.06
+	var saturation := 1.16
+	var sun_disk := 46.0
 	if which == "forest":
-		top = Color("4f86b0")
-		horizon = Color("c5d4c4")
-		ground = Color("3d5a38")
-		fog = Color("b7c6b4")
-		density = 0.0042
+		top = Color(0.42, 0.64, 0.78)
+		horizon = Color(0.82, 0.9, 0.78)
+		ground = Color(0.24, 0.36, 0.22)
+		fog = Color(0.74, 0.82, 0.72)
+		density = 0.0046
+		sun_rot = Vector3(-34.0, 32.0, 0.0)
+		sun_col = Color(1.0, 0.96, 0.84)
+		sun_energy = 1.12
+		fill_col = Color(0.55, 0.68, 0.55)
+		fill_energy = 0.36
+		exposure = 1.0
+		saturation = 1.08
+		sun_disk = 26.0
 	elif which == "mountain":
-		top = Color("6a88aa")
-		horizon = Color("d5dde4")
-		ground = Color("8d949c")
-		fog = Color("c9d3dc")
-		density = 0.0034
+		top = Color(0.18, 0.3, 0.48)
+		horizon = Color(0.95, 0.62, 0.55)
+		ground = Color(0.52, 0.56, 0.62)
+		fog = Color(0.82, 0.74, 0.72)
+		density = 0.0024
+		sun_rot = Vector3(-8.0, -82.0, 0.0)
+		sun_col = Color(1.0, 0.7, 0.52)
+		sun_energy = 1.26
+		fill_col = Color(0.45, 0.52, 0.78)
+		fill_energy = 0.34
+		exposure = 1.05
+		saturation = 1.1
+		sun_disk = 40.0
 	mat.sky_top_color = top
 	mat.sky_horizon_color = horizon
-	mat.ground_horizon_color = horizon.darkened(0.05)
+	mat.ground_horizon_color = horizon.darkened(0.12)
 	mat.ground_bottom_color = ground
-	mat.sun_angle_max = 35.0
+	mat.sun_angle_max = sun_disk
+	mat.sky_energy_multiplier = 1.08
+	mat.sky_curve = 0.12
 	sky.sky_material = mat
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = horizon.lerp(top, 0.35)
-	env.ambient_light_energy = 0.72
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	env.ambient_light_energy = 0.85
+	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	env.fog_enabled = true
 	env.fog_mode = Environment.FOG_MODE_EXPONENTIAL
 	env.fog_density = density
 	env.fog_light_color = fog
-	env.fog_aerial_perspective = 0.35
+	env.fog_aerial_perspective = 0.62
+	env.fog_sky_affect = 0.55
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	env.tonemap_exposure = 1.05
+	env.tonemap_exposure = exposure
 	env.glow_enabled = true
-	env.glow_intensity = 0.45
-	env.glow_strength = 0.85
-	env.glow_bloom = 0.12
-	env.glow_hdr_threshold = 0.85
+	env.glow_intensity = 0.55
+	env.glow_strength = 0.9
+	env.glow_bloom = 0.16
+	env.glow_hdr_threshold = 0.78
 	env.adjustment_enabled = true
-	env.adjustment_brightness = 1.04
-	env.adjustment_contrast = 1.08
-	env.adjustment_saturation = 1.12
+	env.adjustment_brightness = 1.03
+	env.adjustment_contrast = 1.1
+	env.adjustment_saturation = saturation
 	if RenderingServer.get_rendering_device() != null:
 		env.ssao_enabled = true
-		env.ssao_radius = 1.5
-		env.ssao_intensity = 1.15
-		env.ssao_power = 1.4
+		env.ssao_radius = 1.6
+		env.ssao_intensity = 1.2
+		env.ssao_power = 1.45
+		if which != "mountain":
+			env.volumetric_fog_enabled = true
+			env.volumetric_fog_density = 0.02 if which == "forest" else 0.012
+			env.volumetric_fog_albedo = fog
+			env.volumetric_fog_length = 140.0
 	env_node.environment = env
-	if which == "mountain":
-		sun.rotation_degrees = Vector3(-32, -50, 0)
-		sun.light_color = Color(0.92, 0.95, 1.0)
-	elif which == "forest":
-		sun.rotation_degrees = Vector3(-50, -20, 0)
-		sun.light_color = Color(1.0, 0.97, 0.9)
-	else:
-		sun.rotation_degrees = Vector3(-48, -28, 0)
-		sun.light_color = Color(1.0, 0.93, 0.78)
+	sun.rotation_degrees = sun_rot
+	sun.light_color = sun_col
+	sun.light_energy = sun_energy
+	sun.shadow_enabled = shadows_on
+	fill.rotation_degrees = Vector3(-22.0, sun_rot.y + 168.0, 0.0)
+	fill.light_color = fill_col
+	fill.light_energy = fill_energy
 
 
 func _build_terrain() -> void:
-	var bounds: Rect2 = route.bounds(78.0)
-	var step := 4.2
+	_bake_land()
+	var bounds: Rect2 = route.bounds(96.0)
+	var step := 5.5
 	var nx := int(bounds.size.x / step) + 1
 	var nz := int(bounds.size.y / step) + 1
-	if nx * nz > 28000:
-		step *= sqrt(float(nx * nz) / 28000.0)
+	if nx * nz > 22000:
+		step *= sqrt(float(nx * nz) / 22000.0)
 		nx = int(bounds.size.x / step) + 1
 		nz = int(bounds.size.y / step) + 1
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var grid: Array = []
 	grid.resize(nx * nz)
+	var colors: Array = []
+	colors.resize(nx * nz)
 	for iz in nz:
 		for ix in nx:
 			var x := bounds.position.x + float(ix) * step
 			var z := bounds.position.y + float(iz) * step
 			grid[ix + iz * nx] = Vector3(x, _height(x, z), z)
+	for iz in nz:
+		for ix in nx:
+			var p: Vector3 = grid[ix + iz * nx]
+			colors[ix + iz * nx] = _blend_color(p, _grid_slope(grid, nx, nz, ix, iz, step))
 	for iz in nz - 1:
 		for ix in nx - 1:
 			var a: Vector3 = grid[ix + iz * nx]
 			var b: Vector3 = grid[ix + 1 + iz * nx]
 			var c: Vector3 = grid[ix + (iz + 1) * nx]
 			var d: Vector3 = grid[ix + 1 + (iz + 1) * nx]
-			_tri(st, a, c, b)
-			_tri(st, b, c, d)
+			var ca: Color = colors[ix + iz * nx]
+			var cb: Color = colors[ix + 1 + iz * nx]
+			var cc: Color = colors[ix + (iz + 1) * nx]
+			var cd: Color = colors[ix + 1 + (iz + 1) * nx]
+			_tri(st, a, c, b, ca, cc, cb)
+			_tri(st, b, c, d, cb, cc, cd)
 	st.generate_normals()
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
 	var m := StandardMaterial3D.new()
 	m.vertex_color_use_as_albedo = true
-	m.roughness = 1.0
+	m.albedo_texture = _ensure_grain()
+	m.uv1_triplanar = true
+	m.uv1_scale = Vector3(0.18, 0.18, 0.18)
+	m.roughness = 0.96
 	mi.material_override = m
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	level_root.add_child(mi)
+	_build_water(bounds)
 
 
-func _tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
-	st.set_color(_ground_color(a))
+func _tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, ca: Color, cb: Color, cc: Color) -> void:
+	st.set_color(ca)
 	st.add_vertex(a)
-	st.set_color(_ground_color(b))
+	st.set_color(cb)
 	st.add_vertex(b)
-	st.set_color(_ground_color(c))
+	st.set_color(cc)
 	st.add_vertex(c)
 
 
+func road_height(dist: float) -> float:
+	if grade.is_empty():
+		return 0.0
+	var t := (dist - grade_origin) / grade_step
+	var i := clampi(int(floor(t)), 0, grade.size() - 1)
+	var j := clampi(i + 1, 0, grade.size() - 1)
+	return lerpf(grade[i], grade[j], clampf(t - float(i), 0.0, 1.0)) + 0.22
+
+
+func _bridge_at(dist: float) -> bool:
+	if grade_bridge.is_empty():
+		return false
+	var idx := clampi(int(round((dist - grade_origin) / grade_step)), 0, grade_bridge.size() - 1)
+	return grade_bridge[idx] != 0
+
+
+func _grade_pitch(dist: float) -> float:
+	return atan2(road_height(dist + 5.0) - road_height(dist - 1.0), 6.0)
+
+
+func _slope_pitch(pos: Vector3, dir: Vector3) -> float:
+	var ahead := _height(pos.x + dir.x * 3.0, pos.z + dir.z * 3.0)
+	return atan2(ahead - pos.y, 3.0)
+
+
+func _face_along(node: Node3D, dir: Vector3, pitch: float) -> void:
+	var flat := Vector3(dir.x, 0.0, dir.z)
+	if flat.length() < 0.05:
+		return
+	node.basis = Basis.looking_at(flat.normalized(), Vector3.UP)
+	node.rotate_object_local(Vector3.RIGHT, pitch)
+
+
+func _keep_above(pos: Vector3) -> Vector3:
+	if route == null:
+		return pos
+	var floor_y := _height(pos.x, pos.z) + 2.2
+	if pos.y < floor_y:
+		pos.y = floor_y
+	return pos
+
+
+func _lift(p: Vector3) -> Vector3:
+	return Vector3(p.x, _height(p.x, p.z) + p.y, p.z)
+
+
+func _bake_land() -> void:
+	grade_origin = -64.0
+	grade_step = 8.0
+	var count := int(ceil((route.total + 56.0 - grade_origin) / grade_step)) + 1
+	var raw := PackedFloat32Array()
+	raw.resize(count)
+	for i in count:
+		var dist := grade_origin + float(i) * grade_step
+		var p: Vector3 = route.sample(dist)["pos"]
+		raw[i] = _natural(p.x, p.z)
+	var smooth := PackedFloat32Array()
+	smooth.resize(count)
+	var radius := 3 if biome == "desert" else (4 if biome == "forest" else 4)
+	for i in count:
+		var acc := 0.0
+		var wsum := 0.0
+		for k in range(-radius, radius + 1):
+			var j := clampi(i + k, 0, count - 1)
+			var w := float(radius + 1 - absi(k))
+			acc += raw[j] * w
+			wsum += w
+		smooth[i] = acc / wsum
+	var max_rise := 2.2 if biome == "desert" else (2.8 if biome == "forest" else 3.6)
+	for i in range(1, count):
+		smooth[i] = minf(smooth[i], smooth[i - 1] + max_rise)
+	for i in range(count - 2, -1, -1):
+		smooth[i] = minf(smooth[i], smooth[i + 1] + max_rise)
+	water_y = -3.4 if biome == "desert" else (-2.4 if biome == "forest" else -3.6)
+	for i in count:
+		smooth[i] = maxf(smooth[i], water_y + 1.7)
+	grade = smooth
+	grade_bridge = PackedByteArray()
+	grade_bridge.resize(count)
+	for i in count:
+		grade_bridge[i] = 1 if raw[i] < smooth[i] - 7.5 else 0
+	var expanded := grade_bridge.duplicate()
+	for i in count:
+		if grade_bridge[i] == 0:
+			continue
+		for k in range(-2, 3):
+			expanded[clampi(i + k, 0, count - 1)] = 1
+	grade_bridge = expanded
+
+
+func _hash2(ix: int, iz: int) -> float:
+	var n: int = ix * 374761393 + iz * 668265263 + land_seed * 1274126177
+	n = (n ^ (n >> 13)) * 1274126177
+	n = n ^ (n >> 16)
+	return float(n & 0x7fffffff) / 2147483647.0
+
+
+func _noise(x: float, z: float) -> float:
+	var x0 := int(floor(x))
+	var z0 := int(floor(z))
+	var fx := x - float(x0)
+	var fz := z - float(z0)
+	var ux := fx * fx * (3.0 - 2.0 * fx)
+	var uz := fz * fz * (3.0 - 2.0 * fz)
+	var n00 := _hash2(x0, z0)
+	var n10 := _hash2(x0 + 1, z0)
+	var n01 := _hash2(x0, z0 + 1)
+	var n11 := _hash2(x0 + 1, z0 + 1)
+	return lerpf(lerpf(n00, n10, ux), lerpf(n01, n11, ux), uz)
+
+
+func _fbm(x: float, z: float, octaves: int) -> float:
+	var sum := 0.0
+	var amp := 0.5
+	var freq := 1.0
+	var norm := 0.0
+	for _i in octaves:
+		sum += _noise(x * freq, z * freq) * amp
+		norm += amp
+		amp *= 0.5
+		freq *= 2.05
+	return sum / maxf(norm, 0.001)
+
+
+func _ridged(x: float, z: float) -> float:
+	var sum := 0.0
+	var amp := 0.55
+	var freq := 1.0
+	var norm := 0.0
+	for _i in 4:
+		var n := 1.0 - absf(_noise(x * freq, z * freq) * 2.0 - 1.0)
+		sum += pow(n, 0.72) * amp
+		norm += amp
+		amp *= 0.48
+		freq *= 2.17
+	return sum / maxf(norm, 0.001)
+
+
+func _stretch(n: float) -> float:
+	var c := (n - 0.5) * 2.0
+	return signf(c) * pow(absf(c), 0.85)
+
+
+func _natural(x: float, z: float) -> float:
+	if biome == "forest":
+		var region := _stretch(_fbm(x * 0.0046, z * 0.0046, 4)) * 26.0
+		var hills := _stretch(_fbm(x * 0.013 + 6.0, z * 0.012, 4)) * 14.0
+		var detail := (_fbm(x * 0.05, z * 0.046, 2) - 0.5) * 2.8
+		return region + hills + detail
+	if biome == "mountain":
+		var range_h := _stretch(_fbm(x * 0.0026, z * 0.0026, 4)) * 24.0
+		var ridge := (_ridged(x * 0.0056 + 2.0, z * 0.0054) - 0.36) * 78.0
+		var detail := (_fbm(x * 0.024, z * 0.022, 3) - 0.5) * 6.0
+		return range_h + ridge + detail
+	var dunes := _stretch(_fbm(x * 0.004, z * 0.004, 4)) * 18.0
+	var ripples := _stretch(_fbm(x * 0.015 + 11.0, z * 0.014, 3)) * 7.0
+	return dunes + ripples
+
+
+func _river_carve(dist: float, lateral: float) -> float:
+	var center := 52.0 + sin(dist * 0.014 + float(land_seed) * 0.002) * 14.0
+	if biome == "mountain":
+		center = 58.0 + sin(dist * 0.011) * 10.0
+	elif biome == "desert":
+		center = 46.0 + sin(dist * 0.018) * 12.0
+	var half := 6.0 if biome == "desert" else 8.5
+	var d := absf(lateral - center)
+	var reach := half + 9.0
+	if d > reach:
+		return 0.0
+	var depth := 1.7 if biome == "desert" else (3.6 if biome == "forest" else 4.6)
+	if d < half:
+		return depth
+	return depth * (1.0 - smoothstep(half, reach, d))
+
+
 func _height(x: float, z: float) -> float:
-	var d: float = route.distance_to_route(Vector3(x, 0, z))
-	var raw := _raw_height(x, z)
-	return raw * smoothstep(12.0, 26.0, d)
+	var natural := _natural(x, z)
+	if route == null:
+		return natural
+	var proj: Dictionary = route.project(Vector3(x, 0.0, z))
+	var dist := float(proj["dist"])
+	var lat_signed := float(proj["lateral"])
+	var lat := absf(lat_signed)
+	natural -= _river_carve(dist, lat_signed)
+	var road_y := road_height(dist)
+	if _bridge_at(dist) and lat < 14.0:
+		var gorge := minf(natural, road_y - 4.4)
+		return lerpf(gorge, natural, smoothstep(7.0, 14.0, lat))
+	if lat < 12.0:
+		return road_y - 0.4
+	if lat < 20.0:
+		return lerpf(road_y, natural, smoothstep(12.0, 20.0, lat))
+	return natural
 
 
-func _raw_height(x: float, z: float) -> float:
-	if biome == "forest":
-		return sin(x * 0.021) * 1.15 + sin(z * 0.024 + 0.5) * 1.25 + sin(x * 0.08 + z * 0.05) * 0.35
-	if biome == "mountain":
-		return sin(x * 0.013) * 8.5 + sin(z * 0.011 + 1.4) * 10.5 + sin(x * 0.042 + z * 0.03) * 2.2
-	return sin(x * 0.031 + 0.8) * 1.7 + sin(z * 0.026) * 2.1 + sin((x + z) * 0.07) * 0.4
+func _grid_slope(grid: Array, nx: int, nz: int, ix: int, iz: int, step: float) -> float:
+	var ix0 := maxi(ix - 1, 0)
+	var ix1 := mini(ix + 1, nx - 1)
+	var iz0 := maxi(iz - 1, 0)
+	var iz1 := mini(iz + 1, nz - 1)
+	var left: Vector3 = grid[ix0 + iz * nx]
+	var right: Vector3 = grid[ix1 + iz * nx]
+	var down: Vector3 = grid[ix + iz0 * nx]
+	var up: Vector3 = grid[ix + iz1 * nx]
+	var sx := (right.y - left.y) / maxf(step * float(maxi(ix1 - ix0, 1)), 0.001)
+	var sz := (up.y - down.y) / maxf(step * float(maxi(iz1 - iz0, 1)), 0.001)
+	return clampf(Vector2(sx, sz).length(), 0.0, 1.6)
 
 
-func _ground_color(p: Vector3) -> Color:
-	var raw := _raw_height(p.x, p.z)
-	if biome == "forest":
-		return Color("3f6a38").lerp(Color("2a4424"), clampf(raw / 2.0, 0, 1))
-	if biome == "mountain":
-		var rock := Color("6c7278").lerp(Color("596066"), clampf(p.y / 8.0, 0, 1))
-		if raw > 7.5:
-			rock = rock.lerp(Color("e7eef2"), clampf((raw - 7.5) / 4.0, 0, 1))
-		return rock
-	return Color("c6a36c").lerp(Color("a07d49"), clampf(raw / 2.5, 0, 1))
+func _blend_color(p: Vector3, slope: float) -> Color:
+	var h := p.y
+	var sand := Color(0.78, 0.64, 0.42)
+	var dirt := Color(0.46, 0.34, 0.22)
+	var grass := Color(0.28, 0.46, 0.22)
+	var rock := Color(0.46, 0.47, 0.49)
+	var snow := Color(0.91, 0.94, 0.96)
+	var col := sand
+	if biome == "desert":
+		col = sand.lerp(dirt, clampf(slope * 1.5, 0.0, 1.0))
+		if h > 5.0:
+			col = col.lerp(rock, clampf((h - 5.0) / 6.0, 0.0, 1.0))
+		if h < water_y + 0.4:
+			col = Color(0.55, 0.5, 0.36)
+	elif biome == "forest":
+		col = grass.lerp(dirt, clampf(0.2 + slope * 0.85, 0.0, 1.0))
+		if slope > 0.4:
+			col = col.lerp(rock, clampf((slope - 0.4) / 0.5, 0.0, 1.0))
+		if h > 10.0:
+			col = col.lerp(rock, clampf((h - 10.0) / 8.0, 0.0, 1.0))
+		if h > 14.0:
+			col = col.lerp(snow, clampf((h - 14.0) / 6.0, 0.0, 1.0))
+		if h < water_y + 0.45:
+			col = Color(0.26, 0.32, 0.2)
+	else:
+		if h < 3.5:
+			col = grass.lerp(dirt, 0.4)
+		elif h < 11.0:
+			col = grass.lerp(rock, clampf((h - 3.5) / 7.5, 0.0, 1.0))
+		elif h < 15.0:
+			col = rock
+		else:
+			col = rock.lerp(snow, clampf((h - 15.0) / 10.0, 0.0, 1.0))
+		if slope > 0.48 and h < 22.0:
+			col = col.lerp(rock, clampf((slope - 0.48) / 0.45, 0.0, 0.9))
+		if h < water_y + 0.5:
+			col = Color(0.3, 0.34, 0.32)
+	var grain := _noise(p.x * 0.17, p.z * 0.17)
+	return col.lerp(col.lightened(0.16), clampf(grain, 0.0, 1.0) * 0.4)
+
+
+func _ensure_grain() -> Texture2D:
+	if ground_grain != null:
+		return ground_grain
+	var img := Image.create(64, 64, false, Image.FORMAT_RGB8)
+	for y in 64:
+		for x in 64:
+			var n := 0.78 + _hash2(x * 3 + 11, y * 5 + 19) * 0.22
+			img.set_pixel(x, y, Color(n, n * 0.98, n * 0.94))
+	ground_grain = ImageTexture.create_from_image(img)
+	return ground_grain
+
+
+func _build_water(bounds: Rect2) -> void:
+	var mesh := PlaneMesh.new()
+	mesh.size = bounds.size
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.position = Vector3(bounds.position.x + bounds.size.x * 0.5, water_y, bounds.position.y + bounds.size.y * 0.5)
+	var m := StandardMaterial3D.new()
+	if biome == "desert":
+		m.albedo_color = Color(0.28, 0.52, 0.55, 0.62)
+	elif biome == "forest":
+		m.albedo_color = Color(0.2, 0.38, 0.36, 0.7)
+	else:
+		m.albedo_color = Color(0.28, 0.4, 0.5, 0.66)
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.roughness = 0.12
+	m.metallic = 0.08
+	m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	mi.material_override = m
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	level_root.add_child(mi)
 
 
 func _build_road() -> void:
@@ -1092,51 +1426,93 @@ func _build_road() -> void:
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var dash := SurfaceTool.new()
 	dash.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var bridge := SurfaceTool.new()
+	bridge.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var dist := -70.0
-	var prev_l: Vector3
-	var prev_r: Vector3
-	var prev_al: Vector3
-	var prev_ar: Vector3
-	var has_prev := false
-	var step := 2.2
+	var step := 2.4
+	var prev: Dictionary = {}
+	var bridge_used := false
 	while dist < route.total + 24.0:
 		var sm: Dictionary = route.sample(dist)
-		var l: Vector3 = sm["pos"] + sm["right"] * 11.2 + Vector3.UP * 0.08
-		var r: Vector3 = sm["pos"] - sm["right"] * 11.2 + Vector3.UP * 0.08
-		var al: Vector3 = sm["pos"] + sm["right"] * 8.4 + Vector3.UP * 0.14
-		var ar: Vector3 = sm["pos"] - sm["right"] * 8.4 + Vector3.UP * 0.14
-		if has_prev:
-			_flat(st, prev_l, prev_r, r, l, Color("6a5840") if biome == "desert" else Color("4e5648"))
-			_flat(st, prev_al, prev_ar, ar, al, Color("3e3c38"))
-			var span := fposmod(dist, 10.0)
-			if span < 4.0:
-				var cl: Vector3 = sm["pos"] + sm["right"] * 0.12 + Vector3.UP * 0.16
-				var cr: Vector3 = sm["pos"] - sm["right"] * 0.12 + Vector3.UP * 0.16
-				var pl: Vector3 = prev_l.lerp(prev_r, 0.5) + Vector3.UP * 0.04
-				var pr: Vector3 = pl
-				# center from previous midpoint
-				var prev_sm: Dictionary = route.sample(dist - step)
-				pl = prev_sm["pos"] + prev_sm["right"] * 0.12 + Vector3.UP * 0.16
-				pr = prev_sm["pos"] - prev_sm["right"] * 0.12 + Vector3.UP * 0.16
-				_flat(dash, pl, pr, cr, cl, Color("e2c36a"))
-		prev_l = l
-		prev_r = r
-		prev_al = al
-		prev_ar = ar
-		has_prev = true
+		var y := road_height(dist)
+		var l := _road_pt(sm, 11.2, y + 0.1)
+		var r := _road_pt(sm, -11.2, y + 0.1)
+		var al := _road_pt(sm, 8.4, y + 0.18)
+		var ar := _road_pt(sm, -8.4, y + 0.18)
+		var bridged := _bridge_at(dist)
+		if not prev.is_empty():
+			var prev_l: Vector3 = prev["l"]
+			var prev_r: Vector3 = prev["r"]
+			var prev_al: Vector3 = prev["al"]
+			var prev_ar: Vector3 = prev["ar"]
+			var shoulder := Color(0.42, 0.34, 0.24) if biome == "desert" else Color(0.32, 0.34, 0.28)
+			_flat(st, prev_l, prev_r, r, l, shoulder)
+			_flat(st, prev_al, prev_ar, ar, al, Color(0.24, 0.23, 0.21))
+			if fposmod(dist, 10.0) < 4.2:
+				var prev_sm: Dictionary = prev["sm"]
+				var py: float = float(prev["y"])
+				var pl := _road_pt(prev_sm, 0.16, py + 0.22)
+				var pr := _road_pt(prev_sm, -0.16, py + 0.22)
+				var cl := _road_pt(sm, 0.16, y + 0.22)
+				var cr := _road_pt(sm, -0.16, y + 0.22)
+				_flat(dash, pl, pr, cr, cl, Color(0.89, 0.76, 0.4))
+			if bridged and bool(prev["bridge"]):
+				bridge_used = true
+				var rail := Color(0.55, 0.5, 0.44)
+				var prev_sm_b: Dictionary = prev["sm"]
+				var py_b: float = float(prev["y"])
+				_flat(bridge, _road_pt(prev_sm_b, 10.5, py_b + 0.25), _road_pt(prev_sm_b, 10.5, py_b + 1.2), _road_pt(sm, 10.5, y + 1.2), _road_pt(sm, 10.5, y + 0.25), rail)
+				_flat(bridge, _road_pt(prev_sm_b, -10.5, py_b + 1.2), _road_pt(prev_sm_b, -10.5, py_b + 0.25), _road_pt(sm, -10.5, y + 0.25), _road_pt(sm, -10.5, y + 1.2), rail)
+				var center: Vector3 = sm["pos"]
+				var bed := _natural(center.x, center.z)
+				if y - bed > 3.2 and fposmod(dist, 18.0) < step:
+					_pier(bridge, center, bed, y)
+		prev = {"l": l, "r": r, "al": al, "ar": ar, "y": y, "sm": sm, "bridge": bridged}
 		dist += step
+	_commit_surface(st)
+	_commit_surface(dash)
+	if bridge_used:
+		_commit_surface(bridge)
+
+
+func _road_pt(sm: Dictionary, lateral: float, y: float) -> Vector3:
+	var pos: Vector3 = sm["pos"]
+	var right: Vector3 = sm["right"]
+	return Vector3(pos.x + right.x * lateral, y, pos.z + right.z * lateral)
+
+
+func _pier(st: SurfaceTool, pos: Vector3, bottom: float, top: float) -> void:
+	var h := top - bottom
+	if h < 0.6:
+		return
+	_aabb(st, Vector3(pos.x, bottom + h * 0.5, pos.z), Vector3(1.5, h, 1.5), Color(0.42, 0.4, 0.37))
+
+
+func _aabb(st: SurfaceTool, c: Vector3, size: Vector3, color: Color) -> void:
+	var hx := size.x * 0.5
+	var hy := size.y * 0.5
+	var hz := size.z * 0.5
+	var x0 := c.x - hx
+	var x1 := c.x + hx
+	var y0 := c.y - hy
+	var y1 := c.y + hy
+	var z0 := c.z - hz
+	var z1 := c.z + hz
+	_flat(st, Vector3(x0, y1, z0), Vector3(x1, y1, z0), Vector3(x1, y1, z1), Vector3(x0, y1, z1), color)
+	_flat(st, Vector3(x0, y0, z1), Vector3(x1, y0, z1), Vector3(x1, y0, z0), Vector3(x0, y0, z0), color)
+	_flat(st, Vector3(x0, y0, z1), Vector3(x0, y0, z0), Vector3(x0, y1, z0), Vector3(x0, y1, z1), color)
+	_flat(st, Vector3(x1, y0, z0), Vector3(x1, y0, z1), Vector3(x1, y1, z1), Vector3(x1, y1, z0), color)
+	_flat(st, Vector3(x0, y0, z0), Vector3(x1, y0, z0), Vector3(x1, y1, z0), Vector3(x0, y1, z0), color)
+	_flat(st, Vector3(x1, y0, z1), Vector3(x0, y0, z1), Vector3(x0, y1, z1), Vector3(x1, y1, z1), color)
+
+
+func _commit_surface(st: SurfaceTool) -> void:
 	st.generate_normals()
-	dash.generate_normals()
-	var road := MeshInstance3D.new()
-	road.mesh = st.commit()
-	road.material_override = _vertex_mat()
-	road.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	level_root.add_child(road)
-	var line := MeshInstance3D.new()
-	line.mesh = dash.commit()
-	line.material_override = _vertex_mat()
-	line.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	level_root.add_child(line)
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	mi.material_override = _vertex_mat()
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	level_root.add_child(mi)
 
 
 func _flat(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, color: Color) -> void:
@@ -1164,73 +1540,162 @@ func _vertex_mat() -> StandardMaterial3D:
 func _build_props(seed: int) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed + 19
-	var bounds: Rect2 = route.bounds(70.0)
-	var trees := 70 if biome == "forest" else (18 if biome == "mountain" else 8)
-	var rocks := 26 if biome == "desert" else (40 if biome == "mountain" else 16)
-	_scatter(rng, bounds, trees, true)
-	_scatter(rng, bounds, rocks, false)
-	var dist := 40.0
-	var side := 1.0
-	while dist < route.total - 30.0:
-		var sm: Dictionary = route.sample(dist)
-		var spot: Vector3 = sm["pos"] + sm["right"] * 16.0 * side
-		spot.y = _height(spot.x, spot.z)
-		var house := meshes.outpost()
-		house.position = spot
-		var ahead: Vector3 = spot + sm["dir"]
-		level_root.add_child(house)
-		if ahead.distance_to(spot) > 0.2:
-			house.look_at(ahead, Vector3.UP)
-		side *= -1.0
-		dist += 95.0
+	var bounds: Rect2 = route.bounds(86.0)
+	var buckets := {}
+	if biome == "forest":
+		_scatter_kind(rng, bounds, buckets, "pine", 220, 1.15, 1.9, 0.7, false)
+		_scatter_kind(rng, bounds, buckets, "oak", 160, 1.05, 1.75, 0.62, false)
+		_scatter_kind(rng, bounds, buckets, "rock", 55, 0.7, 1.6, 1.2, false)
+		_scatter_kind(rng, bounds, buckets, "rock_b", 42, 1.5, 3.0, 0.5, true)
+	elif biome == "mountain":
+		_scatter_kind(rng, bounds, buckets, "pine", 120, 0.9, 1.6, 0.5, false)
+		_scatter_kind(rng, bounds, buckets, "rock", 120, 0.85, 1.9, 1.4, false)
+		_scatter_kind(rng, bounds, buckets, "rock_b", 90, 1.8, 3.6, 0.42, true)
+	else:
+		_scatter_kind(rng, bounds, buckets, "palm", 56, 1.1, 1.7, 0.75, false)
+		_scatter_kind(rng, bounds, buckets, "cactus", 100, 0.95, 1.5, 0.8, false)
+		_scatter_kind(rng, bounds, buckets, "rock", 110, 0.7, 1.8, 1.3, false)
+		_scatter_kind(rng, bounds, buckets, "rock_b", 28, 1.4, 2.6, 0.55, true)
+	for kind in buckets.keys():
+		_spawn_multi(str(kind), buckets[kind])
+	_build_villages(rng)
 
 
-func _scatter(rng: RandomNumberGenerator, bounds: Rect2, count: int, trees: bool) -> void:
+func _scatter_kind(rng: RandomNumberGenerator, bounds: Rect2, buckets: Dictionary, kind: String, count: int, min_s: float, max_s: float, max_slope: float, cliffs: bool) -> void:
 	var placed := 0
 	var tries := 0
-	while placed < count and tries < count * 12:
+	var limit := count * 18
+	var batch: Array = []
+	while placed < count and tries < limit:
 		tries += 1
 		var x := rng.randf_range(bounds.position.x, bounds.position.x + bounds.size.x)
 		var z := rng.randf_range(bounds.position.y, bounds.position.y + bounds.size.y)
-		var d: float = route.distance_to_route(Vector3(x, 0, z))
-		if d < 12.0 or d > 68.0:
+		var proj: Dictionary = route.project(Vector3(x, 0.0, z))
+		if absf(float(proj["lateral"])) < 14.5:
 			continue
 		var y := _height(x, z)
-		if trees:
-			_tree(Vector3(x, y, z), rng.randf_range(0.8, 1.5))
-		else:
-			_rock(Vector3(x, y, z), rng.randf_range(0.6, 1.8))
+		if y < water_y + 0.55:
+			continue
+		var slope := _slope_pitch(Vector3(x, y, z), Vector3(1, 0, 0))
+		var steep := absf(slope)
+		if cliffs:
+			if steep < 0.22:
+				continue
+		elif kind == "pine" and biome == "mountain" and (y > 13.0 or steep > max_slope):
+			continue
+		elif steep > max_slope and kind != "rock" and kind != "rock_b":
+			continue
+		var s := rng.randf_range(min_s, max_s)
+		if cliffs:
+			s *= rng.randf_range(1.0, 1.35)
+		var yaw := rng.randf_range(0.0, TAU)
+		var basis := Basis(Vector3.UP, yaw).scaled(Vector3(s, s * rng.randf_range(0.9, 1.15), s))
+		batch.append(Transform3D(basis, Vector3(x, y, z)))
 		placed += 1
+	buckets[kind] = batch
 
 
-func _tree(pos: Vector3, scale: float) -> void:
-	var kind := "pine"
-	if biome == "desert":
-		kind = "cactus" if int(absf(pos.x * 3.0)) % 2 == 0 else "palm"
-	elif biome == "forest":
-		kind = "oak" if int(absf(pos.z)) % 2 == 0 else "pine"
+func _spawn_multi(kind: String, xforms: Array) -> void:
+	if xforms.is_empty():
+		return
 	var node := meshes.prop(kind)
-	node.position = pos
-	var fit := 1.35 if kind == "cactus" else 1.7
-	node.scale = Vector3.ONE * scale * fit
-	level_root.add_child(node)
+	for child in node.find_children("*", "MeshInstance3D", true, false):
+		var mesh_inst := child as MeshInstance3D
+		if mesh_inst == null or mesh_inst.mesh == null:
+			continue
+		var local := _chain_xf(node, mesh_inst)
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = mesh_inst.mesh
+		mm.instance_count = xforms.size()
+		for i in xforms.size():
+			var xf: Transform3D = xforms[i]
+			mm.set_instance_transform(i, xf * local)
+		var inst := MultiMeshInstance3D.new()
+		inst.multimesh = mm
+		var mat: Material = mesh_inst.material_override
+		if mat == null and mesh_inst.mesh.get_surface_count() > 0:
+			mat = mesh_inst.mesh.surface_get_material(0)
+		if mat == null:
+			var fallback := StandardMaterial3D.new()
+			fallback.roughness = 0.9
+			if kind == "rock" or kind == "rock_b":
+				fallback.albedo_color = Color(0.46, 0.45, 0.42)
+			elif kind == "cactus":
+				fallback.albedo_color = Color(0.34, 0.52, 0.26)
+			elif kind == "palm":
+				fallback.albedo_color = Color(0.28, 0.48, 0.22)
+			else:
+				fallback.albedo_color = Color(0.2, 0.38, 0.16)
+			mat = fallback
+		inst.material_override = mat
+		inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		level_root.add_child(inst)
+	node.free()
 
 
-func _rock(pos: Vector3, scale: float) -> void:
-	var node := meshes.prop("rock" if int(absf(pos.x)) % 2 == 0 else "rock_b")
-	node.position = pos
-	node.scale = Vector3.ONE * scale * 0.85
-	level_root.add_child(node)
+func _chain_xf(root: Node3D, mi: Node3D) -> Transform3D:
+	var xf := mi.transform
+	var p: Node = mi.get_parent()
+	while p is Node3D and p != root:
+		xf = (p as Node3D).transform * xf
+		p = p.get_parent()
+	return xf
+
+
+func _build_villages(rng: RandomNumberGenerator) -> void:
+	var clusters := 4 if biome != "desert" else 3
+	for _c in clusters:
+		var dist := rng.randf_range(90.0, maxf(route.total - 90.0, 120.0))
+		var sm: Dictionary = route.sample(dist)
+		var right: Vector3 = sm["right"]
+		var origin: Vector3 = sm["pos"] + right * -rng.randf_range(26.0, 42.0)
+		origin.y = _height(origin.x, origin.z)
+		if origin.y < water_y + 1.0:
+			continue
+		var houses := rng.randi_range(3, 5)
+		for _h in houses:
+			var spot := origin + Vector3(rng.randf_range(-9.0, 9.0), 0.0, rng.randf_range(-9.0, 9.0))
+			spot.y = _height(spot.x, spot.z)
+			if absf(float(route.project(spot)["lateral"])) < 15.0:
+				continue
+			var house := meshes.outpost()
+			var s := rng.randf_range(0.65, 1.15)
+			var crush := rng.randf_range(0.42, 1.0)
+			house.scale = Vector3(s, s * crush, s)
+			house.position = spot - Vector3(0, (1.0 - crush) * 0.6, 0)
+			house.rotation_degrees = Vector3(rng.randf_range(-8.0, 8.0), rng.randf_range(0.0, 360.0), rng.randf_range(-7.0, 7.0))
+			_tint_ruin(house)
+			level_root.add_child(house)
+		for _r in 7:
+			var rock := meshes.prop("rock" if rng.randf() > 0.5 else "rock_b")
+			var rp := origin + Vector3(rng.randf_range(-11.0, 11.0), 0.0, rng.randf_range(-11.0, 11.0))
+			rp.y = _height(rp.x, rp.z)
+			rock.position = rp
+			rock.scale = Vector3.ONE * rng.randf_range(0.45, 1.15)
+			rock.rotation_degrees = Vector3(rng.randf_range(-12, 12), rng.randf_range(0, 360), rng.randf_range(-12, 12))
+			level_root.add_child(rock)
+
+
+func _tint_ruin(node: Node3D) -> void:
+	for child in node.find_children("*", "MeshInstance3D", true, false):
+		var mi := child as MeshInstance3D
+		var src: Material = mi.material_override
+		if src is StandardMaterial3D:
+			var dup := src.duplicate() as StandardMaterial3D
+			dup.albedo_color = dup.albedo_color.darkened(0.42)
+			mi.material_override = dup
 
 
 func _build_gate(dist: float, text: String, color: Color) -> void:
 	var sm: Dictionary = route.sample(dist)
 	var root := Node3D.new()
-	root.position = sm["pos"]
+	var gate_pos: Vector3 = sm["pos"]
+	gate_pos.y = road_height(dist)
+	root.position = gate_pos
 	level_root.add_child(root)
-	var ahead: Vector3 = sm["pos"] + sm["dir"]
-	if ahead.distance_to(sm["pos"]) > 0.1:
-		root.look_at(ahead, Vector3.UP)
+	var gate_dir: Vector3 = sm["dir"]
+	_face_along(root, gate_dir, _grade_pitch(dist))
 	for side in [-1.0, 1.0]:
 		var pillar := MeshInstance3D.new()
 		var box := BoxMesh.new()
@@ -1260,12 +1725,14 @@ func _build_gate(dist: float, text: String, color: Color) -> void:
 func _build_slots() -> void:
 	for row in Defs.ROWS:
 		for lane in Defs.LANES:
-			var sm: Dictionary = route.sample(Defs.along(row))
+			var along := Defs.along(row)
+			var sm: Dictionary = route.sample(along)
 			var pos: Vector3 = sm["pos"] + sm["right"] * Defs.lateral(lane)
+			pos.y = road_height(along)
 			var body := StaticBody3D.new()
 			body.collision_layer = 2
 			body.collision_mask = 0
-			body.position = pos + Vector3(0, 0.45, 0)
+			body.position = pos + Vector3(0, 0.42, 0)
 			body.set_meta("lane", lane)
 			body.set_meta("row", row)
 			var shape := CollisionShape3D.new()
@@ -1281,10 +1748,9 @@ func _build_slots() -> void:
 			pad.material_override = pad_empty
 			pad.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			body.add_child(pad)
-			var ahead: Vector3 = pos + sm["dir"]
 			level_root.add_child(body)
-			if ahead.distance_to(pos) > 0.1:
-				body.look_at(ahead, Vector3.UP)
+			var slot_dir: Vector3 = sm["dir"]
+			_face_along(body, slot_dir, _grade_pitch(along))
 			slot_bodies.append(body)
 			slot_pads.append(pad)
 			cell_pad[_cell_key(lane, row)] = pad
