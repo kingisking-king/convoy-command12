@@ -17,6 +17,15 @@ signal next_pressed
 signal retry_pressed
 signal menu_pressed
 signal resume_pressed
+signal rotate_pressed
+signal remove_pressed
+signal arrange_pressed(style: String)
+signal upgrade_pressed(stat: String, level: int)
+signal camo_pressed(camo_name: String)
+signal name_changed(convoy_name: String)
+signal preset_save(preset_name: String)
+signal preset_load(preset_name: String)
+signal preset_delete(preset_name: String)
 
 var audio = null
 var root: Control
@@ -25,6 +34,7 @@ var help_box: PanelContainer
 var brief_box: PanelContainer
 var build_top: PanelContainer
 var build_bottom: PanelContainer
+var build_dock: PanelContainer
 var drive_top: PanelContainer
 var drive_bottom: PanelContainer
 var pause_box: PanelContainer
@@ -50,6 +60,11 @@ var build_budget: Label
 var build_column: Label
 var build_warn: Label
 var deploy_button: Button
+var name_edit: LineEdit
+var preset_edit: LineEdit
+var preset_pick: OptionButton
+var upgrade_label: Label
+var camo_buttons := {}
 var drive_title: Label
 var drive_progress: ProgressBar
 var drive_cargo: Label
@@ -131,8 +146,13 @@ func hovering_ui() -> bool:
 	return c != null and c.mouse_filter != Control.MOUSE_FILTER_IGNORE
 
 
+func typing() -> bool:
+	var focus := get_viewport().gui_get_focus_owner()
+	return focus is LineEdit
+
+
 func hide_all() -> void:
-	for panel in [menu_box, help_box, brief_box, build_top, build_bottom, drive_top, drive_bottom, pause_box, result_box]:
+	for panel in [menu_box, help_box, brief_box, build_top, build_dock, build_bottom, drive_top, drive_bottom, pause_box, result_box]:
 		panel.visible = false
 	map.visible = false
 
@@ -174,29 +194,26 @@ func show_brief(level: Dictionary, index: int, level_count: int, bank: int) -> v
 	]
 
 
-func show_build(level: Dictionary, bank: int, slots: Array, kind: String, p_route) -> void:
+func show_build(level: Dictionary, bank: int, units: Array, kind: String, p_route, state: Dictionary = {}) -> void:
 	hide_all()
 	build_top.visible = true
+	build_dock.visible = true
 	build_bottom.visible = true
 	map.visible = true
 	selected_kind = kind
-	build_title.text = "%s  ·  ARM THE COLUMN" % str(level["name"]).to_upper()
-	var cost := Defs.roster_cost(slots)
-	var cargo := Defs.count_kind(slots, "cargo")
+	var convoy := str(state.get("name", "Column"))
+	build_title.text = "%s  ·  %s" % [str(level["name"]).to_upper(), convoy.to_upper()]
+	var cost := Defs.roster_cost(units)
+	var cargo := Defs.count_kind(units, "cargo")
 	build_budget.text = "Budget  $%d" % bank
-	build_column.text = "Column  $%d    left  $%d    cargo  %d" % [cost, bank - cost, cargo]
+	build_column.text = "Formation  $%d    left  $%d    vehicles  %d/%d    cargo  %d" % [cost, bank - cost, units.size(), Defs.MAX_UNITS, cargo]
 	var warn := ""
 	if cargo == 0:
 		warn = "Place at least one cargo truck."
 	elif cost > bank:
-		warn = "That column costs more than the budget."
-	else:
-		for entry in slots:
-			if entry == "":
-				continue
-			if entry == "cargo":
-				warn = "Cargo is leading. It will take the first hits."
-			break
+		warn = "That formation costs more than the budget."
+	elif Defs.cargo_is_leading(units):
+		warn = "Cargo is ahead of the guns. It will take the first hits."
 	build_warn.text = warn
 	deploy_button.disabled = cargo == 0 or cost > bank
 	for key in cards:
@@ -205,14 +222,17 @@ func show_build(level: Dictionary, bank: int, slots: Array, kind: String, p_rout
 			btn.add_theme_stylebox_override("normal", _style(Color("3a3420"), Color("e2b84a"), 6))
 		else:
 			btn.add_theme_stylebox_override("normal", _style(Color("1c2118"), Color("3c4030"), 6))
+	_sync_dock(state, units)
 	if p_route:
 		var blips: Array = []
-		for i in slots.size():
-			if str(slots[i]) == "":
+		for entry in units:
+			if typeof(entry) != TYPE_DICTIONARY:
 				continue
-			var sm: Dictionary = p_route.sample(-float(i) * Defs.SPACING)
-			var col := Color("e2b84a") if slots[i] == "cargo" else Color("9dc56a")
-			blips.append({"x": sm["pos"].x, "z": sm["pos"].z, "color": col, "r": 4.0 if slots[i] == "cargo" else 3.0})
+			var sm: Dictionary = p_route.sample(Defs.along(int(entry.get("row", 0))))
+			var pos: Vector3 = sm["pos"] + sm["right"] * Defs.lateral(int(entry.get("lane", Defs.CENTER)))
+			var ekind := str(entry.get("kind", ""))
+			var col := Color("e2b84a") if ekind == "cargo" else Color("9dc56a")
+			blips.append({"x": pos.x, "z": pos.z, "color": col, "r": 4.0 if ekind == "cargo" else 3.0})
 		map.set_state(p_route, blips, 0.0)
 
 
@@ -388,7 +408,7 @@ func _build_help() -> void:
 	box.add_child(title)
 	help_body = Label.new()
 	help_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	help_body.text = "Arm a column, then ride it to the drop.\n\nBuild\n1–6 pick a unit. Left click a numbered pad to place it. Right click clears a pad. Q fills a suggested column. Enter deploys.\nYou need at least one cargo truck. Mix escorts beside the cargo. Anti-air is for helicopters. The repair truck heals whoever is hurting, cargo first.\n\nDrive\nGuns fire on their own. Right-drag orbits the camera, the wheel zooms, F snaps back. A/D orbit, W/S zoom.\nQ smoke — hostiles miss more for a few seconds.\nE airstrike — a marker, then a blast on the densest group. It does not hit your trucks.\nR field repair — a burst of healing.\nEsc pauses.\n\nDeliver at least one cargo truck. Lose if they all die. Pay rolls into the next mission's budget."
+	help_body.text = "Arm a formation, then ride it to the drop.\n\nBuild\n1–6 pick a unit. Left click an empty grid cell to place it. Left click a vehicle to select it, then drag it to another cell. Right click removes it. R rotates the selected vehicle. Q fills a suggested wedge. Enter deploys.\nThe grid is five lanes by eight rows. The formation keeps that shape on the road.\nName the convoy, pick a camo, and upgrade armor, weapon, or speed on the selected vehicle. Save a preset and load it later.\nYou need at least one cargo truck. Flank the cargo or put guns ahead of it. Anti-air is for helicopters. The repair truck heals whoever is hurting, cargo first.\n\nDrive\nGuns fire on their own. Right-drag orbits the camera, the wheel zooms, F snaps back. A/D orbit, W/S zoom.\nQ smoke — thick cover, hostiles miss more.\nE airstrike — a jet, then a blast on the densest group. It does not hit your trucks.\nR field repair — a burst of healing.\nEsc pauses.\n\nDeliver at least one cargo truck. Lose if they all die. Pay rolls into the next mission's budget."
 	box.add_child(help_body)
 	box.add_child(_button("Back", back_pressed))
 
@@ -478,6 +498,161 @@ func _build_build() -> void:
 	deploy_button = _button("Deploy", deploy_pressed)
 	side.add_child(deploy_button)
 	side.add_child(_button("Back", back_pressed))
+	_build_dock()
+
+
+func _build_dock() -> void:
+	build_dock = PanelContainer.new()
+	build_dock.set_anchors_preset(Control.PRESET_LEFT_WIDE)
+	build_dock.offset_left = 12
+	build_dock.offset_top = 118
+	build_dock.offset_right = 318
+	build_dock.offset_bottom = -180
+	build_dock.add_theme_stylebox_override("panel", _style(Color(0.07, 0.08, 0.06, 0.9), Color(0.45, 0.4, 0.24), 8))
+	root.add_child(build_dock)
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	build_dock.add_child(scroll)
+	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(280, 0)
+	box.add_theme_constant_override("separation", 6)
+	scroll.add_child(box)
+	box.add_child(_caption("CONVOY NAME"))
+	name_edit = LineEdit.new()
+	name_edit.placeholder_text = "Name the column"
+	name_edit.text = "Column One"
+	name_edit.focus_exited.connect(func() -> void: name_changed.emit(name_edit.text))
+	name_edit.text_submitted.connect(func(text: String) -> void: name_changed.emit(text))
+	box.add_child(name_edit)
+	box.add_child(_caption("CAMO"))
+	var camo_row := HBoxContainer.new()
+	camo_row.add_theme_constant_override("separation", 4)
+	box.add_child(camo_row)
+	for camo_name in Defs.CAMO_ORDER:
+		var spec: Dictionary = Defs.CAMOS[camo_name]
+		var swatch := Button.new()
+		swatch.text = str(spec["name"]).substr(0, 1)
+		swatch.tooltip_text = str(spec["name"])
+		swatch.custom_minimum_size = Vector2(36, 28)
+		var col: Color = spec["a"]
+		swatch.add_theme_stylebox_override("normal", _style(col, Color("2a2a24"), 4))
+		swatch.pressed.connect(camo_pressed.emit.bind(camo_name))
+		camo_row.add_child(swatch)
+		camo_buttons[camo_name] = swatch
+	box.add_child(_caption("SELECTED VEHICLE"))
+	upgrade_label = Label.new()
+	upgrade_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	upgrade_label.text = "Click a vehicle on the grid."
+	box.add_child(upgrade_label)
+	box.add_child(_upgrade_row("Armor", "armor"))
+	box.add_child(_upgrade_row("Weapon", "weapon"))
+	box.add_child(_upgrade_row("Speed", "speed"))
+	var tools := HBoxContainer.new()
+	tools.add_theme_constant_override("separation", 4)
+	box.add_child(tools)
+	tools.add_child(_emit_button("Rotate", rotate_pressed))
+	tools.add_child(_emit_button("Remove", remove_pressed))
+	box.add_child(_caption("FORMATION"))
+	var shapes := HBoxContainer.new()
+	shapes.add_theme_constant_override("separation", 4)
+	box.add_child(shapes)
+	for style in ["line", "wedge", "box"]:
+		var shape := Button.new()
+		shape.text = style.capitalize()
+		shape.pressed.connect(arrange_pressed.emit.bind(style))
+		shapes.add_child(shape)
+	box.add_child(_caption("PRESETS"))
+	preset_edit = LineEdit.new()
+	preset_edit.placeholder_text = "Preset name"
+	box.add_child(preset_edit)
+	preset_pick = OptionButton.new()
+	box.add_child(preset_pick)
+	var preset_row := HBoxContainer.new()
+	preset_row.add_theme_constant_override("separation", 4)
+	box.add_child(preset_row)
+	var save_b := Button.new()
+	save_b.text = "Save"
+	save_b.pressed.connect(func() -> void: preset_save.emit(preset_edit.text))
+	preset_row.add_child(save_b)
+	var load_b := Button.new()
+	load_b.text = "Load"
+	load_b.pressed.connect(func() -> void:
+		if preset_pick.item_count == 0:
+			return
+		preset_load.emit(preset_pick.get_item_text(preset_pick.selected))
+	)
+	preset_row.add_child(load_b)
+	var del_b := Button.new()
+	del_b.text = "Delete"
+	del_b.pressed.connect(func() -> void:
+		if preset_pick.item_count == 0:
+			return
+		preset_delete.emit(preset_pick.get_item_text(preset_pick.selected))
+	)
+	preset_row.add_child(del_b)
+
+
+func _sync_dock(state: Dictionary, units: Array) -> void:
+	var convoy := str(state.get("name", ""))
+	if name_edit and not name_edit.has_focus() and convoy != "":
+		name_edit.text = convoy
+	var camo := str(state.get("camo", "woodland"))
+	for key in camo_buttons:
+		var swatch: Button = camo_buttons[key]
+		var col: Color = Defs.CAMOS[key]["a"]
+		var border := Color("e2b84a") if key == camo else Color("2a2a24")
+		swatch.add_theme_stylebox_override("normal", _style(col, border, 4))
+	var selected := int(state.get("selected", -1))
+	if selected >= 0 and selected < units.size():
+		var unit: Dictionary = units[selected]
+		var spec: Dictionary = Defs.UNITS[str(unit["kind"])]
+		upgrade_label.text = "%s\nArmor %d   Weapon %d   Speed %d\nYaw %d°   lane %d   row %d" % [
+			spec["name"], int(unit["armor"]), int(unit["weapon"]), int(unit["speed"]),
+			int(unit["yaw"]), int(unit["lane"]) + 1, int(unit["row"]) + 1,
+		]
+	else:
+		upgrade_label.text = "Click a vehicle on the grid."
+	var names: Array = state.get("presets", [])
+	if preset_pick:
+		var current := preset_pick.get_item_text(preset_pick.selected) if preset_pick.item_count > 0 else ""
+		preset_pick.clear()
+		for preset_name in names:
+			preset_pick.add_item(str(preset_name))
+		for i in preset_pick.item_count:
+			if preset_pick.get_item_text(i) == current:
+				preset_pick.select(i)
+				break
+
+
+func _caption(text: String) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.add_theme_color_override("font_color", Color("e2b84a"))
+	label.add_theme_font_size_override("font_size", 12)
+	return label
+
+
+func _upgrade_row(title: String, stat: String) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	var label := Label.new()
+	label.text = title
+	label.custom_minimum_size = Vector2(70, 0)
+	row.add_child(label)
+	for level in 3:
+		var btn := Button.new()
+		btn.text = str(level)
+		btn.custom_minimum_size = Vector2(36, 0)
+		btn.pressed.connect(upgrade_pressed.emit.bind(stat, level))
+		row.add_child(btn)
+	return row
+
+
+func _emit_button(text: String, which: Signal) -> Button:
+	var btn := Button.new()
+	btn.text = text
+	btn.pressed.connect(func() -> void: which.emit())
+	return btn
 
 
 func _build_drive() -> void:

@@ -6,24 +6,32 @@ Lose if every cargo truck is destroyed.
 Pay from a win is added to your war chest for the next mission.
 
 BUILD
+  The start of the road is a grid, five lanes wide and eight rows deep.
+  The formation keeps that shape while it drives.
   1-6        select Cargo, Humvee, APC, Tank, Anti-Air, Repair
-  Left click place on a numbered pad (1 is the front)
+  Left click an empty cell to place the selected unit
+  Left click a vehicle, then drag it to another cell
   Right click remove
-  Q          suggested column
+  R          rotate the selected vehicle
+  Q          suggested wedge
   Enter      deploy
+  Side panel: convoy name, camo, armor / weapon / speed upgrades,
+              Line / Wedge / Box, save and load presets
   Right-drag orbit, wheel zoom, F reset camera
   A/D orbit, W/S zoom
 
-Bring at least one cargo truck. Keep escorts beside it.
+Bring at least one cargo truck. Put guns beside or ahead of the cargo.
 Anti-air is for helicopters. Do not lead with cargo.
 
 DRIVE
   Guns fire automatically.
-  Q smoke     enemies miss more
-  E airstrike hits hostiles only
+  Q smoke     thick cover, enemies miss more
+  E airstrike a jet, then a blast. Hostiles only
   R field repair
   Esc pause
   Right-drag orbit, wheel zoom, F recenter
   F11 fullscreen, M mute
 
 Yellow on the map is cargo. Red is hostile.
+
+Art: Kenney car kit, mini characters, and nature kit (CC0). See CREDITS.

@@ -11,14 +11,20 @@ const AudioScript = preload("res://scripts/audio_fx.gd")
 enum Phase { MENU, HELP, BRIEF, BUILD, DRIVE, PAUSE, RESULTS }
 
 const SAVE_PATH := "user://campaign.cfg"
+const PRESET_PATH := "user://formations.cfg"
 const START_BANK := 500
 
 var phase: int = Phase.MENU
 var bank := START_BANK
 var level_index := 0
 var campaign_done := false
-var slots: Array = []
+var formation: Array = []
 var selected_kind := "humvee"
+var selected_i := -1
+var drag_index := -1
+var drag_from := Vector2i(-1, -1)
+var convoy_name := "Column One"
+var camo := "desert"
 var route = null
 var sim = null
 var column_cost := 0
@@ -28,6 +34,7 @@ var world
 var hud
 var audio
 var shot_dir := ""
+var catalog_dir := ""
 var manual_sim := false
 var mission_resolved := false
 var sim_acc := 0.0
@@ -36,7 +43,6 @@ var fps_label: Label
 var return_phase: int = Phase.MENU
 
 func _ready() -> void:
-	_blank_slots()
 	audio = AudioScript.new()
 	add_child(audio)
 	audio.setup()
@@ -57,6 +63,12 @@ func _ready() -> void:
 		var ok: bool = Checks.run()
 		get_tree().quit(0 if ok else 1)
 		return
+	if catalog_dir != "":
+		world.set_shadows(false)
+		get_viewport().msaa_3d = Viewport.MSAA_DISABLED
+		_enter_menu()
+		call_deferred("_catalog_run")
+		return
 	if shot_dir != "":
 		manual_sim = true
 		world.set_shadows(false)
@@ -73,9 +85,6 @@ func _process(dt: float) -> void:
 	if show_fps:
 		fps_label.text = "%d fps" % Engine.get_frames_per_second()
 	world.tick(dt)
-	if phase == Phase.BUILD:
-		if not hud.hovering_ui():
-			world.set_hover(world.pick_slot(get_viewport().get_mouse_position()))
 	if phase == Phase.DRIVE and sim != null:
 		if not manual_sim:
 			_advance(dt)
@@ -130,6 +139,15 @@ func _connect_hud() -> void:
 	hud.retry_pressed.connect(_on_retry)
 	hud.menu_pressed.connect(_on_menu)
 	hud.resume_pressed.connect(_on_resume)
+	hud.rotate_pressed.connect(_on_rotate)
+	hud.remove_pressed.connect(_on_remove_selected)
+	hud.arrange_pressed.connect(_on_arrange)
+	hud.upgrade_pressed.connect(_on_upgrade)
+	hud.camo_pressed.connect(_on_camo)
+	hud.name_changed.connect(_on_name)
+	hud.preset_save.connect(_on_preset_save)
+	hud.preset_load.connect(_on_preset_load)
+	hud.preset_delete.connect(_on_preset_delete)
 
 
 func _enter_menu() -> void:
@@ -186,15 +204,27 @@ func _open_brief() -> void:
 
 func _on_arm() -> void:
 	phase = Phase.BUILD
-	_blank_slots()
+	formation.clear()
+	selected_i = -1
+	drag_index = -1
 	selected_kind = "humvee"
+	var level: Dictionary = Defs.levels()[level_index]
+	camo = Defs.camo_for_biome(str(level["biome"]))
+	if convoy_name == "":
+		convoy_name = "Column One"
 	_refresh_build()
 
 
 func _refresh_build() -> void:
 	var level: Dictionary = Defs.levels()[level_index]
-	hud.show_build(level, bank, slots, selected_kind, route)
-	world.show_column(slots)
+	world.meshes.scheme = camo
+	hud.show_build(level, bank, formation, selected_kind, route, {
+		"name": convoy_name,
+		"camo": camo,
+		"selected": selected_i,
+		"presets": _preset_names(),
+	})
+	world.show_formation(formation, camo, selected_i)
 
 
 func _on_unit_selected(kind: String) -> void:
@@ -203,17 +233,19 @@ func _on_unit_selected(kind: String) -> void:
 
 
 func _on_quick() -> void:
-	var roster: Array = Defs.recommended(level_index, bank)
-	_blank_slots()
-	for i in roster.size():
-		if i < slots.size():
-			slots[i] = roster[i]
+	formation = Defs.recommended(level_index, bank)
+	selected_i = -1
 	audio.play("ui_place", -4.0)
 	_refresh_build()
-	hud.toast("Suggested column loaded. Edit it, then deploy.")
+	hud.toast("Suggested wedge loaded. Drag it into the shape you want.")
 
 
 func _build_input(event: InputEvent) -> void:
+	if hud.typing() and event is InputEventKey:
+		return
+	if event is InputEventMouseMotion and not hud.hovering_ui():
+		_hover_cell((event as InputEventMouseMotion).position)
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		var idx := -1
 		match event.keycode:
@@ -226,37 +258,256 @@ func _build_input(event: InputEvent) -> void:
 			KEY_Q:
 				_on_quick()
 				return
+			KEY_R:
+				_on_rotate()
+				return
 			KEY_ENTER, KEY_KP_ENTER:
 				_on_deploy()
 				return
 		if idx >= 0 and idx < Defs.CARD_ORDER.size():
 			_on_unit_selected(Defs.CARD_ORDER[idx])
 		return
-	if event is InputEventMouseButton and event.pressed:
+	if event is InputEventMouseButton:
 		if hud.hovering_ui():
 			return
-		var slot: int = world.pick_slot((event as InputEventMouseButton).position)
-		if slot < 0:
+		var mb := event as InputEventMouseButton
+		var cell: Vector2i = world.pick_cell(mb.position)
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_RIGHT:
+			_remove_at(cell)
 			return
-		if event.button_index == MOUSE_BUTTON_RIGHT:
-			if str(slots[slot]) != "":
-				slots[slot] = ""
-				audio.play("ui_click", -6.0, 0.8)
-				_refresh_build()
+		if mb.button_index != MOUSE_BUTTON_LEFT:
 			return
-		if event.button_index != MOUSE_BUTTON_LEFT:
-			return
-		if selected_kind == "":
-			hud.toast("Pick a unit first.")
-			return
-		var trial: Array = slots.duplicate()
-		trial[slot] = selected_kind
-		if Defs.roster_cost(trial) > bank:
-			hud.toast("Not enough budget.")
-			return
-		slots[slot] = selected_kind
-		audio.play("ui_place", -3.0)
+		if mb.pressed:
+			_press_cell(cell)
+		elif drag_index >= 0:
+			_drop_cell(cell)
+
+
+func _hover_cell(screen: Vector2) -> void:
+	var cell: Vector2i = world.pick_cell(screen)
+	var occupied: bool = Defs.index_at(formation, cell.x, cell.y) >= 0 if cell.x >= 0 else false
+	var ghost_kind := ""
+	var ok: bool = false
+	if drag_index >= 0 and drag_index < formation.size():
+		ghost_kind = str(formation[drag_index]["kind"])
+		ok = cell.x >= 0 and (not occupied or Defs.index_at(formation, cell.x, cell.y) == drag_index)
+	elif cell.x >= 0 and not occupied and selected_kind != "":
+		ghost_kind = selected_kind
+		ok = _can_add(selected_kind)
+	world.set_cell_hover(cell, "ok" if ok else ("bad" if cell.x >= 0 and not occupied else "none"))
+	world.set_ghost(ghost_kind, cell if not occupied or drag_index >= 0 else Vector2i(-1, -1), ok, camo)
+
+
+func _press_cell(cell: Vector2i) -> void:
+	if cell.x < 0:
+		selected_i = -1
+		drag_index = -1
 		_refresh_build()
+		return
+	var idx := Defs.index_at(formation, cell.x, cell.y)
+	if idx >= 0:
+		selected_i = idx
+		drag_index = idx
+		drag_from = cell
+		_refresh_build()
+		return
+	drag_index = -1
+	if selected_kind == "":
+		hud.toast("Pick a unit first.")
+		return
+	if formation.size() >= Defs.MAX_UNITS:
+		hud.toast("The formation is full.")
+		return
+	if not _can_add(selected_kind):
+		hud.toast("Not enough budget.")
+		return
+	formation.append(Defs.make_unit(selected_kind, cell.x, cell.y))
+	selected_i = formation.size() - 1
+	audio.play("ui_place", -3.0)
+	_refresh_build()
+
+
+func _drop_cell(cell: Vector2i) -> void:
+	var idx := drag_index
+	drag_index = -1
+	if idx < 0 or idx >= formation.size():
+		return
+	if cell.x < 0 or cell == drag_from:
+		_refresh_build()
+		return
+	var other := Defs.index_at(formation, cell.x, cell.y)
+	if other >= 0 and other != idx:
+		hud.toast("That cell is taken.")
+		_refresh_build()
+		return
+	formation[idx]["lane"] = cell.x
+	formation[idx]["row"] = cell.y
+	audio.play("ui_place", -6.0)
+	_refresh_build()
+
+
+func _remove_at(cell: Vector2i) -> void:
+	var idx := Defs.index_at(formation, cell.x, cell.y)
+	if idx < 0:
+		return
+	formation.remove_at(idx)
+	if selected_i == idx:
+		selected_i = -1
+	elif selected_i > idx:
+		selected_i -= 1
+	audio.play("ui_click", -6.0, 0.8)
+	_refresh_build()
+
+
+func _can_add(kind: String) -> bool:
+	var trial: Array = formation.duplicate()
+	trial.append(Defs.make_unit(kind, 0, 0))
+	return Defs.roster_cost(trial) <= bank
+
+
+func _on_rotate() -> void:
+	if selected_i < 0 or selected_i >= formation.size():
+		return
+	formation[selected_i]["yaw"] = posmod(int(formation[selected_i]["yaw"]) + Defs.YAW_STEP, 360)
+	_refresh_build()
+
+
+func _on_remove_selected() -> void:
+	if selected_i < 0 or selected_i >= formation.size():
+		return
+	_remove_at(Vector2i(int(formation[selected_i]["lane"]), int(formation[selected_i]["row"])))
+
+
+func _on_arrange(style: String) -> void:
+	if formation.is_empty():
+		return
+	var kinds: Array = []
+	var kept: Array = []
+	for entry in formation:
+		kinds.append(str(entry["kind"]))
+		kept.append(entry)
+	var laid: Array = Defs.arrange(kinds, style)
+	var pool: Array = kept.duplicate()
+	for spot in laid:
+		for i in pool.size():
+			if str(pool[i]["kind"]) == str(spot["kind"]):
+				spot["armor"] = int(pool[i]["armor"])
+				spot["weapon"] = int(pool[i]["weapon"])
+				spot["speed"] = int(pool[i]["speed"])
+				spot["yaw"] = int(pool[i]["yaw"])
+				pool.remove_at(i)
+				break
+	formation = laid
+	selected_i = -1
+	_refresh_build()
+
+
+func _on_upgrade(stat: String, level: int) -> void:
+	if selected_i < 0 or selected_i >= formation.size():
+		hud.toast("Select a vehicle first.")
+		return
+	if stat != "armor" and stat != "weapon" and stat != "speed":
+		return
+	var previous := int(formation[selected_i][stat])
+	formation[selected_i][stat] = clampi(level, 0, 2)
+	if Defs.roster_cost(formation) > bank:
+		formation[selected_i][stat] = previous
+		hud.toast("Not enough budget for that upgrade.")
+		return
+	_refresh_build()
+
+
+func _on_camo(next: String) -> void:
+	if not Defs.CAMOS.has(next):
+		return
+	camo = next
+	_refresh_build()
+
+
+func _on_name(next: String) -> void:
+	var trimmed := next.strip_edges()
+	convoy_name = trimmed if trimmed != "" else "Column One"
+	_refresh_build()
+
+
+func _on_preset_save(preset_name: String) -> void:
+	var trimmed := preset_name.strip_edges()
+	if trimmed == "":
+		hud.toast("Name the preset first.")
+		return
+	var cfg := ConfigFile.new()
+	cfg.load(PRESET_PATH)
+	var names: Array = _preset_names()
+	if trimmed not in names:
+		names.append(trimmed)
+	cfg.set_value("presets", "names", names)
+	cfg.set_value(trimmed, "camo", camo)
+	cfg.set_value(trimmed, "convoy", convoy_name)
+	cfg.set_value(trimmed, "units", JSON.stringify(formation))
+	cfg.save(PRESET_PATH)
+	hud.toast("Saved preset %s." % trimmed)
+	_refresh_build()
+
+
+func _on_preset_load(preset_name: String) -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(PRESET_PATH) != OK:
+		return
+	var raw := str(cfg.get_value(preset_name, "units", "[]"))
+	var parsed: Variant = JSON.parse_string(raw)
+	if typeof(parsed) != TYPE_ARRAY:
+		hud.toast("That preset could not be read.")
+		return
+	var loaded: Array = []
+	for entry in parsed:
+		if typeof(entry) != TYPE_DICTIONARY:
+			continue
+		loaded.append(Defs.make_unit(
+			str(entry.get("kind", "")),
+			int(entry.get("lane", 0)),
+			int(entry.get("row", 0)),
+			int(entry.get("yaw", 0)),
+			int(entry.get("armor", 0)),
+			int(entry.get("weapon", 0)),
+			int(entry.get("speed", 0)),
+		))
+	if Defs.roster_cost(loaded) > bank:
+		hud.toast("That preset costs more than the budget.")
+		return
+	if Defs.count_kind(loaded, "cargo") > 4:
+		return
+	formation = loaded
+	camo = str(cfg.get_value(preset_name, "camo", camo))
+	convoy_name = str(cfg.get_value(preset_name, "convoy", convoy_name))
+	selected_i = -1
+	_refresh_build()
+	hud.toast("Loaded %s." % preset_name)
+
+
+func _on_preset_delete(preset_name: String) -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(PRESET_PATH) != OK:
+		return
+	var names: Array = []
+	for preset in _preset_names():
+		if str(preset) != preset_name:
+			names.append(preset)
+	cfg.set_value("presets", "names", names)
+	cfg.erase_section(preset_name)
+	cfg.save(PRESET_PATH)
+	_refresh_build()
+
+
+func _preset_names() -> Array:
+	var cfg := ConfigFile.new()
+	if cfg.load(PRESET_PATH) != OK:
+		return []
+	var names: Variant = cfg.get_value("presets", "names", [])
+	var out: Array = []
+	if names is Array or names is PackedStringArray:
+		for preset_name in names:
+			out.append(str(preset_name))
+	return out
 
 
 func _on_deploy() -> void:
@@ -280,6 +531,7 @@ func _start_drive(roster: Array) -> void:
 	sim_acc = 0.0
 	var level: Dictionary = Defs.levels()[level_index]
 	sim = SimScript.new()
+	world.meshes.scheme = camo
 	sim.start(level, roster, route, int(level["seed"]) + 100 + attempt * 17)
 	world.begin_drive()
 	audio.set_music("music_drive")
@@ -441,17 +693,7 @@ func _on_menu() -> void:
 
 
 func _packed_roster() -> Array:
-	var roster: Array = []
-	for entry in slots:
-		if str(entry) != "":
-			roster.append(entry)
-	return roster
-
-
-func _blank_slots() -> void:
-	slots.clear()
-	for _i in Defs.MAX_SLOTS:
-		slots.append("")
+	return formation.duplicate()
 
 
 func _living_heli() -> bool:
@@ -495,6 +737,8 @@ func _parse_args() -> void:
 	for a in args:
 		if str(a).begins_with("--shots="):
 			shot_dir = str(a).trim_prefix("--shots=")
+		elif str(a).begins_with("--catalog="):
+			catalog_dir = str(a).trim_prefix("--catalog=")
 
 
 func _has_arg(flag: String) -> bool:
@@ -544,6 +788,48 @@ func _shot_run() -> void:
 		await get_tree().process_frame
 	await _capture("05_result")
 	get_tree().quit(0)
+
+
+func _catalog_run() -> void:
+	for _i in 4:
+		await get_tree().process_frame
+	world.meshes.scheme = "desert"
+	if world.menu_root:
+		world.menu_root.visible = false
+	var kinds: Array = ["cargo", "humvee", "apc", "tank", "aa", "repair", "technical", "infantry", "rpg", "heli"]
+	for kind in kinds:
+		var enemy: bool = kind == "technical" or kind == "infantry" or kind == "rpg" or kind == "heli"
+		var node: Node3D = world.meshes.build(str(kind), enemy, "desert" if not enemy else "")
+		world.add_child(node)
+		node.position = Vector3(0, 0.0 if kind != "heli" else 1.4, 0)
+		node.rotation_degrees = Vector3(0, 28, 0)
+		var focus := Vector3(0, 1.15, 0)
+		var dist := 7.5
+		if kind == "infantry" or kind == "rpg":
+			dist = 3.4
+			focus = Vector3(0, 1.0, 0)
+		elif kind == "heli":
+			dist = 8.5
+			focus = Vector3(0, 1.6, 0)
+		elif kind == "tank":
+			dist = 8.2
+		world.cam.global_position = focus + Vector3(dist * 0.72, dist * 0.38, dist * 0.62)
+		world.cam.look_at(focus, Vector3.UP)
+		for _j in 2:
+			await get_tree().process_frame
+		await _capture_to(catalog_dir, "unit_%s" % kind)
+		node.queue_free()
+		for _j in 2:
+			await get_tree().process_frame
+	get_tree().quit(0)
+
+
+func _capture_to(dir_path: String, name: String) -> void:
+	await RenderingServer.frame_post_draw
+	var image := get_viewport().get_texture().get_image()
+	var path := dir_path.trim_suffix("/") + "/" + name + ".png"
+	image.save_png(path)
+	print("SHOT ", path)
 
 
 func _capture(name: String) -> void:

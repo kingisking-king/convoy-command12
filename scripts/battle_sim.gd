@@ -50,7 +50,19 @@ func start(p_level: Dictionary, roster: Array, p_route, combat_seed: int) -> voi
 	}
 	smoke_timer = 0.0
 	for i in roster.size():
-		_add_friendly(str(roster[i]), -float(i) * Defs.SPACING)
+		var entry = roster[i]
+		if typeof(entry) == TYPE_DICTIONARY:
+			_add_friendly(
+				str(entry["kind"]),
+				Defs.along(int(entry.get("row", i))),
+				Defs.lateral(int(entry.get("lane", Defs.CENTER))),
+				float(entry.get("yaw", 0.0)),
+				int(entry.get("armor", 0)),
+				int(entry.get("weapon", 0)),
+				int(entry.get("speed", 0))
+			)
+		else:
+			_add_friendly(str(entry), -float(i) * Defs.SPACING, 0.0, 0.0, 0, 0, 0)
 
 
 func tick(dt: float) -> void:
@@ -178,20 +190,26 @@ func progress() -> float:
 	return clampf(lead_s / route.total, 0.0, 1.0)
 
 
-func _add_friendly(kind: String, along: float) -> void:
+func _add_friendly(kind: String, along: float, lateral: float = 0.0, yaw: float = 0.0, armor: int = 0, weapon: int = 0, speed_lv: int = 0) -> void:
 	var spec: Dictionary = Defs.UNITS[kind]
+	var stats: Dictionary = Defs.scaled(kind, armor, weapon, speed_lv)
 	var u := {
 		"id": next_id,
 		"kind": kind,
 		"role": spec["role"],
-		"hp": float(spec["hp"]),
-		"max_hp": float(spec["hp"]),
-		"dmg": float(spec["dmg"]),
+		"hp": float(stats["hp"]),
+		"max_hp": float(stats["hp"]),
+		"dmg": float(stats["dmg"]),
 		"range": float(spec["rng"]),
-		"speed": float(spec["spd"]),
+		"speed": float(stats["spd"]),
 		"rof": float(spec["rof"]),
 		"heal": float(spec["heal"]),
 		"s": along,
+		"lateral": lateral,
+		"yaw": yaw,
+		"armor": armor,
+		"weapon": weapon,
+		"speed_lv": speed_lv,
 		"pos": Vector3.ZERO,
 		"dir": Vector3(0, 0, 1),
 		"cooldown": 0.0,
@@ -205,10 +223,18 @@ func _add_friendly(kind: String, along: float) -> void:
 	next_id += 1
 	if kind == "cargo":
 		cargo_total += 1
-	var sm: Dictionary = route.sample(along)
-	u["pos"] = sm["pos"]
-	u["dir"] = sm["dir"]
+	_place_friendly(u)
 	friendlies.append(u)
+
+
+func _place_friendly(u) -> void:
+	var sm: Dictionary = route.sample(float(u["s"]))
+	u["pos"] = sm["pos"] + sm["right"] * float(u.get("lateral", 0.0))
+	var dir: Vector3 = sm["dir"]
+	var yaw := deg_to_rad(float(u.get("yaw", 0.0)))
+	if absf(yaw) > 0.001:
+		dir = Basis(Vector3.UP, yaw) * dir
+	u["dir"] = dir
 
 
 func _move_friendlies(dt: float) -> void:
@@ -216,9 +242,7 @@ func _move_friendlies(dt: float) -> void:
 	for u in friendlies:
 		if not u["alive"] or u["delivered"]:
 			u["moving"] = false
-			var sm_hold: Dictionary = route.sample(float(u["s"]))
-			u["pos"] = sm_hold["pos"]
-			u["dir"] = sm_hold["dir"]
+			_place_friendly(u)
 			continue
 		u["s"] = float(u["s"]) + pace * dt
 		u["moving"] = pace > 0.1
@@ -231,9 +255,7 @@ func _move_friendlies(dt: float) -> void:
 		elif u["role"] != "cargo" and float(u["s"]) > route.total:
 			u["s"] = route.total
 			u["moving"] = false
-		var sm: Dictionary = route.sample(float(u["s"]))
-		u["pos"] = sm["pos"]
-		u["dir"] = sm["dir"]
+		_place_friendly(u)
 		if u["alive"] and not u["delivered"]:
 			lead_s = maxf(lead_s, minf(float(u["s"]), route.total))
 
@@ -437,6 +459,13 @@ func _fire(attacker, target, src: Vector3, dst: Vector3, dmg: float, profile: St
 	var aim := dst
 	if not hit:
 		aim = dst + Vector3(rng.randf_range(-3.5, 3.5), rng.randf_range(-0.4, 1.4), rng.randf_range(-3.5, 3.5))
+	var weapon := "bullet"
+	if profile == "aa":
+		weapon = "aa"
+	elif profile == "heavy":
+		weapon = "shell"
+	if str(attacker.get("kind", "")) == "rpg":
+		weapon = "rocket"
 	events.append({
 		"type": "tracer",
 		"a": src,
@@ -444,6 +473,8 @@ func _fire(attacker, target, src: Vector3, dst: Vector3, dmg: float, profile: St
 		"profile": profile,
 		"team": team,
 		"hit": hit,
+		"weapon": weapon,
+		"target_kind": str(target.get("kind", "")),
 	})
 	if not hit:
 		return
@@ -474,7 +505,7 @@ func _resolve_strikes() -> void:
 			if float(e["hp"]) <= 0.0:
 				e["hp"] = 0.0
 				e["alive"] = false
-		events.append({"type": "boom", "pos": pos, "big": true})
+		events.append({"type": "boom", "pos": pos, "big": true, "strike": true})
 
 
 func _cleanup() -> void:
