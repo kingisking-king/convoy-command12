@@ -109,6 +109,30 @@ static func run() -> bool:
 		print("FAIL cargo took a cleared IED")
 		ok = false
 
+	var gun_level: Dictionary = levels[0].duplicate(true)
+	gun_level["ambushes"] = []
+	gun_level["length"] = 80.0
+	var gun_route = RouteScript.new(gun_level)
+	var held = SimScript.new()
+	held.start(gun_level, [Defs.make_unit("humvee", Defs.CENTER, 0)], gun_route, 9)
+	held.player_gun_id = int(held.friendlies[0]["id"])
+	var ahead: Vector3 = gun_route.sample(24.0)["pos"]
+	held.spawn_at("infantry", ahead)
+	var hp_before := float(held.enemies[0]["hp"])
+	for _g in 50:
+		held.tick(1.0 / 30.0)
+	if float(held.enemies[0]["hp"]) < hp_before - 0.5:
+		print("FAIL AI fired while the player was gunning")
+		ok = false
+	var src: Vector3 = held.friendlies[0]["pos"] + Vector3(0, 1.6, 0)
+	var dst: Vector3 = held.enemies[0]["pos"] + Vector3(0, 1.0, 0)
+	if not held.player_shot(int(held.friendlies[0]["id"]), src, dst, 9.0, "light", 8.0, false):
+		print("FAIL player shot missed a lined-up target")
+		ok = false
+	if float(held.enemies[0]["hp"]) > hp_before - 1.0:
+		print("FAIL player shot did no damage")
+		ok = false
+
 	print("--- grid formation holds lanes and upgrades scale ---")
 	var wedge: Array = Defs.arrange(["humvee", "apc", "cargo"], "wedge")
 	if wedge.size() != 3:

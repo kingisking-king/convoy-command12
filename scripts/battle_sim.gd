@@ -26,6 +26,7 @@ var god_mode := false
 var threat := 1.0
 var ieds: Array = []
 var fuel_clock := 0.0
+var player_gun_id := -1
 var charge_cap := {"smoke": 0, "airstrike": 0, "repair": 0}
 
 func start(p_level: Dictionary, roster: Array, p_route, combat_seed: int) -> void:
@@ -56,6 +57,7 @@ func start(p_level: Dictionary, roster: Array, p_route, combat_seed: int) -> voi
 	}
 	smoke_timer = 0.0
 	fuel_clock = 0.0
+	player_gun_id = -1
 	ieds.clear()
 	charge_cap = {
 		"smoke": int(src["smoke"]),
@@ -531,6 +533,8 @@ func _friendly_fire(dt: float) -> void:
 		if not u["alive"] or u["delivered"] or float(u["dmg"]) <= 0.0:
 			continue
 		u["cooldown"] = maxf(0.0, float(u["cooldown"]) - dt)
+		if int(u["id"]) == player_gun_id:
+			continue
 		if float(u["cooldown"]) > 0.0:
 			continue
 		var tgt = _find_enemy(int(u["target_id"]))
@@ -565,6 +569,93 @@ func _friendly_fire(dt: float) -> void:
 				if float(other["hp"]) <= 0.0:
 					other["hp"] = 0.0
 					other["alive"] = false
+
+
+func player_shot(unit_id: int, src: Vector3, aim: Vector3, dmg: float, profile: String, rof: float, indirect: bool) -> bool:
+	var attacker = _find_friendly(unit_id)
+	if attacker == null or not attacker["alive"] or attacker["delivered"]:
+		return false
+	attacker["cooldown"] = 1.0 / maxf(rof, 0.05)
+	var weapon := "bullet"
+	if profile == "aa":
+		weapon = "aa"
+	elif profile == "heavy":
+		weapon = "shell"
+	if indirect:
+		events.append({
+			"type": "tracer",
+			"a": src,
+			"b": aim,
+			"profile": profile,
+			"team": "friendly",
+			"hit": true,
+			"weapon": weapon,
+			"target_kind": "",
+		})
+		var splashed := false
+		for e in enemies:
+			if not e["alive"]:
+				continue
+			var blast: float = Vector2(e["pos"].x, e["pos"].z).distance_to(Vector2(aim.x, aim.z))
+			if blast > 6.5:
+				continue
+			var fall := 1.0 - blast / 6.5
+			e["hp"] = float(e["hp"]) - dmg * (0.45 + 0.55 * fall)
+			if float(e["hp"]) <= 0.0:
+				e["hp"] = 0.0
+				e["alive"] = false
+			splashed = true
+		return splashed
+	var dir := aim - src
+	if dir.length() < 0.2:
+		return false
+	dir = dir.normalized()
+	var reach := src.distance_to(aim)
+	var best = null
+	var best_t := reach + 1.0
+	for e in enemies:
+		if not e["alive"]:
+			continue
+		var lift := 1.2 if bool(e["air"]) else 1.0
+		var body := Vector3(e["pos"].x, e["pos"].y + lift, e["pos"].z)
+		var to := body - src
+		var t := to.dot(dir)
+		if t < 1.2 or t > reach + 0.4:
+			continue
+		var closest := src + dir * t
+		var miss := closest.distance_to(body)
+		var radius := 1.45
+		if bool(e["air"]):
+			radius = 2.4
+		if miss > radius or t >= best_t:
+			continue
+		best_t = t
+		best = e
+	var end := aim
+	var hit := best != null
+	if hit:
+		var hit_lift := 1.2 if bool(best["air"]) else 1.0
+		end = Vector3(best["pos"].x, best["pos"].y + hit_lift, best["pos"].z)
+	events.append({
+		"type": "tracer",
+		"a": src,
+		"b": end,
+		"profile": profile,
+		"team": "friendly",
+		"hit": hit,
+		"weapon": weapon,
+		"target_kind": str(best["kind"]) if hit else "",
+	})
+	if not hit:
+		return false
+	var mult := Defs.air_multiplier(str(attacker["role"]), bool(best["air"]))
+	if mult <= 0.0:
+		return false
+	best["hp"] = float(best["hp"]) - dmg * mult * rng.randf_range(0.96, 1.04)
+	if float(best["hp"]) <= 0.0:
+		best["hp"] = 0.0
+		best["alive"] = false
+	return true
 
 
 func _enemy_fire(dt: float) -> void:

@@ -25,7 +25,14 @@ Bring at least one cargo truck. Put guns beside or ahead of the cargo.
 Anti-air is for helicopters. Do not lead with cargo.
 
 DRIVE
-  Guns fire automatically.
+  Guns fire automatically. The column keeps moving if you take a gun.
+  G          man the nearest gun, or leave it
+  Click      an armed vehicle to man that gun
+  Mouse      aim
+  Left click fire
+  Right click scope
+  Wheel      switch weapon (tank main gun and coax)
+  Tab        next gun
   Q smoke     thick cover, enemies miss more
   E airstrike a jet, then a blast. Hostiles only
   R field repair
