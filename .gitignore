@@ -1,0 +1,7 @@
+.godot/
+build/
+*.tmp
+*.pck
+export-templates.tpz
+*.exe
+.DS_Store
