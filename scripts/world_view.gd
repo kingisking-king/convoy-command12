@@ -25,6 +25,9 @@ var focus := Vector3.ZERO
 var travel_dir := Vector3(0, 0, 1)
 var cam_ready := false
 var camera_mode := "menu"
+var gunner_id := -1
+var gunner_yaw := 0.0
+var gunner_pitch := 0.0
 var shake := 0.0
 var menu_spin := 0.0
 var smoke_puffs: Array = []
@@ -355,7 +358,10 @@ func sync(sim, dt: float) -> void:
 				var ftail := node.get_node_or_null("tail_rotor")
 				if ftail:
 					ftail.rotate_x(dt * 32.0)
-			_aim(node, u, sim, dt)
+			if int(u["id"]) == gunner_id:
+				_apply_gunner_turret(node)
+			else:
+				_aim(node, u, sim, dt)
 			_set_emitting(node, "dust", bool(u["moving"]) and not bool(u["delivered"]))
 		else:
 			_set_emitting(node, "dust", false)
@@ -421,7 +427,7 @@ func sync(sim, dt: float) -> void:
 
 
 func tick(dt: float) -> void:
-	if camera_mode == "locked":
+	if camera_mode == "locked" or camera_mode == "gunner":
 		return
 	if camera_mode == "menu":
 		menu_spin += dt * 0.25
@@ -589,6 +595,40 @@ func _hp(node: Node3D, ratio: float, alive: bool) -> void:
 	fill.position.x = (r - 1.0) * 0.62
 	if cam:
 		hp.look_at(cam.global_position, Vector3.UP)
+
+
+func _apply_gunner_turret(node: Node3D) -> void:
+	var turret := node.get_node_or_null("turret") as Node3D
+	if turret == null:
+		return
+	turret.rotation = Vector3(gunner_pitch, gunner_yaw, 0.0)
+	var hp := node.get_node_or_null("hp")
+	if hp:
+		hp.visible = false
+
+
+func pick_gun(screen: Vector2, sim) -> int:
+	if cam == null or sim == null:
+		return -1
+	var origin := cam.project_ray_origin(screen)
+	var dir := cam.project_ray_normal(screen)
+	var best_id := -1
+	var best_miss := 2.6
+	for u in sim.friendlies:
+		if not u["alive"] or u["delivered"]:
+			continue
+		if Defs.gun_list(str(u["kind"])).is_empty():
+			continue
+		var body := Vector3(u["pos"].x, u["pos"].y + 1.5, u["pos"].z)
+		var to := body - origin
+		var t := to.dot(dir)
+		if t < 3.0:
+			continue
+		var miss := (origin + dir * t).distance_to(body)
+		if miss < best_miss:
+			best_miss = miss
+			best_id = int(u["id"])
+	return best_id
 
 
 func _aim(node: Node3D, u, sim, dt: float) -> void:

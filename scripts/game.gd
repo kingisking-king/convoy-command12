@@ -38,7 +38,14 @@ var shot_dir := ""
 var catalog_dir := ""
 var lands_dir := ""
 var gallery_dir := ""
+var gunner_dir := ""
 var manual_sim := false
+var gunner_id := -1
+var gunner_slot := 0
+var gunner_yaw := 0.0
+var gunner_pitch := 0.0
+var gunner_zoom := false
+var gunner_state := {}
 var mission_resolved := false
 var sim_acc := 0.0
 var show_fps := false
@@ -91,6 +98,12 @@ func _ready() -> void:
 		_enter_menu()
 		call_deferred("_gallery_run")
 		return
+	if gunner_dir != "":
+		world.set_shadows(false)
+		get_viewport().msaa_3d = Viewport.MSAA_DISABLED
+		_enter_menu()
+		call_deferred("_gunner_run")
+		return
 	if sandbox_shot != "":
 		world.set_shadows(false)
 		get_viewport().msaa_3d = Viewport.MSAA_DISABLED
@@ -114,9 +127,18 @@ func _process(dt: float) -> void:
 		fps_label.text = "%d fps" % Engine.get_frames_per_second()
 	world.tick(dt)
 	if phase == Phase.DRIVE and sim != null:
+		_gunner_housekeeping()
+		if gunner_id >= 0:
+			_gunner_tick(dt)
 		if not manual_sim:
 			_advance(dt)
+		world.gunner_id = gunner_id
+		world.gunner_yaw = gunner_yaw
+		world.gunner_pitch = gunner_pitch
 		world.sync(sim, dt)
+		if gunner_id >= 0:
+			_apply_gunner_camera()
+			_refresh_gunner_hud()
 		hud.refresh_drive(sim, route)
 		audio.set_engine(true)
 		audio.set_heli(_living_heli())
@@ -126,6 +148,36 @@ func _process(dt: float) -> void:
 	if phase == Phase.PAUSE and sim != null:
 		world.sync(sim, dt)
 		hud.refresh_drive(sim, route)
+
+
+func _input(event: InputEvent) -> void:
+	if phase != Phase.DRIVE or sim == null or sim.status != "running":
+		return
+	if event is InputEventKey and event.pressed and not event.echo:
+		var key := (event as InputEventKey).keycode
+		if key == KEY_G:
+			if gunner_id >= 0:
+				_exit_gunner()
+			else:
+				_enter_nearest_gun()
+			get_viewport().set_input_as_handled()
+			return
+		if key == KEY_TAB and gunner_id >= 0:
+			_cycle_gunner(1)
+			get_viewport().set_input_as_handled()
+			return
+	if gunner_id >= 0:
+		_gunner_input(event)
+		if event is InputEventMouseMotion or event is InputEventMouseButton:
+			get_viewport().set_input_as_handled()
+		return
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if hud.hovering_ui():
+			return
+		var picked: int = world.pick_gun(event.position, sim)
+		if picked >= 0:
+			_enter_gunner(picked, true)
+			get_viewport().set_input_as_handled()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -725,6 +777,8 @@ func _start_drive(roster: Array) -> void:
 	sim.sandbox = sandbox
 	sim.god_mode = sandbox_god
 	sim.threat = sandbox_threat
+	_exit_gunner()
+	gunner_state.clear()
 	world.begin_drive()
 	audio.set_music("music_drive")
 	hud.show_drive(sandbox)
@@ -761,6 +815,312 @@ func _drain() -> void:
 		_finish(finished)
 
 
+func _gunner_housekeeping() -> void:
+	if gunner_id < 0 or sim == null:
+		return
+	var u = _friendly_by_id(gunner_id)
+	if u == null or not u["alive"] or u["delivered"]:
+		_exit_gunner()
+		hud.toast("Gunner out.")
+
+
+func _friendly_by_id(id: int) -> Variant:
+	if sim == null:
+		return null
+	for u in sim.friendlies:
+		if int(u["id"]) == id:
+			return u
+	return null
+
+
+func _enter_nearest_gun() -> void:
+	var best := -1
+	var best_d := 1.0e9
+	var origin: Vector3 = world.cam.global_position
+	for u in sim.friendlies:
+		if not u["alive"] or u["delivered"]:
+			continue
+		if Defs.gun_list(str(u["kind"])).is_empty():
+			continue
+		var at: Vector3 = u["pos"]
+		var d := origin.distance_to(at)
+		if d < best_d:
+			best_d = d
+			best = int(u["id"])
+	if best < 0:
+		hud.toast("No gun to take.")
+		return
+	_enter_gunner(best, true)
+
+
+func _cycle_gunner(step: int) -> void:
+	var ids: Array[int] = []
+	for u in sim.friendlies:
+		if not u["alive"] or u["delivered"]:
+			continue
+		if Defs.gun_list(str(u["kind"])).is_empty():
+			continue
+		ids.append(int(u["id"]))
+	if ids.is_empty():
+		_exit_gunner()
+		return
+	var at := ids.find(gunner_id)
+	if at < 0:
+		at = 0
+	else:
+		at = posmod(at + step, ids.size())
+	_enter_gunner(ids[at], true)
+
+
+func _enter_gunner(id: int, capture: bool) -> void:
+	var u = _friendly_by_id(id)
+	if u == null:
+		return
+	var spec: Dictionary = Defs.gun_spec(str(u["kind"]), 0)
+	if spec.is_empty():
+		hud.toast("That vehicle has no gun.")
+		return
+	gunner_id = id
+	gunner_slot = 0
+	gunner_zoom = false
+	sim.player_gun_id = id
+	world.camera_mode = "gunner"
+	gunner_yaw = 0.0
+	var emin := deg_to_rad(float(spec["emin"]))
+	var emax := deg_to_rad(float(spec["emax"]))
+	gunner_pitch = clampf(0.0, emin, emax)
+	_ensure_gun_state(id, 0, spec)
+	if capture:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	var uname := str(Defs.UNITS[str(u["kind"])]["name"])
+	hud.toast("%s — %s" % [uname, str(spec["name"])])
+
+
+func _exit_gunner() -> void:
+	if gunner_id < 0 and (sim == null or int(sim.player_gun_id) < 0):
+		return
+	gunner_id = -1
+	gunner_zoom = false
+	if sim != null:
+		sim.player_gun_id = -1
+	world.gunner_id = -1
+	if phase == Phase.DRIVE:
+		world.camera_mode = "drive"
+	if world.cam:
+		world.cam.fov = 58.0
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	hud.hide_gunner()
+
+
+func _ensure_gun_state(id: int, slot: int, spec: Dictionary) -> Dictionary:
+	var key := "%d:%d" % [id, slot]
+	if not gunner_state.has(key):
+		gunner_state[key] = {
+			"heat": 0.0,
+			"ammo": int(spec["mag"]),
+			"reload": 0.0,
+			"cool": 0.0,
+			"hot": false,
+		}
+	return gunner_state[key]
+
+
+func _current_gun() -> Dictionary:
+	var u = _friendly_by_id(gunner_id)
+	if u == null:
+		return {}
+	return Defs.gun_spec(str(u["kind"]), gunner_slot)
+
+
+func _clamp_gun_aim(spec: Dictionary) -> void:
+	var yaw_lim := deg_to_rad(float(spec["yaw"]))
+	gunner_yaw = clampf(gunner_yaw, -yaw_lim, yaw_lim)
+	gunner_pitch = clampf(gunner_pitch, deg_to_rad(float(spec["emin"])), deg_to_rad(float(spec["emax"])))
+
+
+func _gunner_input(event: InputEvent) -> void:
+	var spec := _current_gun()
+	if spec.is_empty():
+		return
+	if event is InputEventMouseMotion:
+		var motion := event as InputEventMouseMotion
+		gunner_yaw -= motion.relative.x * 0.0026
+		gunner_pitch -= motion.relative.y * 0.002
+		_clamp_gun_aim(spec)
+	elif event is InputEventMouseButton and event.pressed:
+		var button := event as InputEventMouseButton
+		if button.button_index == MOUSE_BUTTON_LEFT and not bool(spec["auto"]):
+			_gunner_fire()
+		elif button.button_index == MOUSE_BUTTON_RIGHT:
+			gunner_zoom = not gunner_zoom
+		elif button.button_index == MOUSE_BUTTON_WHEEL_UP:
+			_switch_gun_slot(1)
+		elif button.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			_switch_gun_slot(-1)
+
+
+func _switch_gun_slot(step: int) -> void:
+	var u = _friendly_by_id(gunner_id)
+	if u == null:
+		return
+	var list: Array = Defs.gun_list(str(u["kind"]))
+	if list.size() < 2:
+		return
+	gunner_slot = posmod(gunner_slot + step, list.size())
+	var spec: Dictionary = list[gunner_slot]
+	_clamp_gun_aim(spec)
+	_ensure_gun_state(gunner_id, gunner_slot, spec)
+	hud.toast(str(spec["name"]))
+
+
+func _gunner_tick(dt: float) -> void:
+	var spec := _current_gun()
+	if spec.is_empty():
+		return
+	var st: Dictionary = _ensure_gun_state(gunner_id, gunner_slot, spec)
+	st["cool"] = maxf(0.0, float(st["cool"]) - dt)
+	st["reload"] = maxf(0.0, float(st["reload"]) - dt)
+	if float(spec["cool"]) > 0.0:
+		st["heat"] = maxf(0.0, float(st["heat"]) - float(spec["cool"]) * dt)
+		if bool(st["hot"]) and float(st["heat"]) <= 0.22:
+			st["hot"] = false
+	if bool(spec["auto"]) and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		_gunner_fire()
+
+
+func _gun_node() -> Node3D:
+	if world.unit_nodes.has(gunner_id):
+		return world.unit_nodes[gunner_id] as Node3D
+	return null
+
+
+func _gun_aim_point(node: Node3D, spec: Dictionary) -> Vector3:
+	var turret := node.get_node_or_null("turret") as Node3D
+	var src := node.global_position + Vector3(0, 1.6, 0)
+	if turret != null:
+		var muzzle := turret.get_node_or_null("muzzle") as Node3D
+		src = muzzle.global_position if muzzle != null else turret.global_position
+	var rng := float(spec["rng"])
+	if bool(spec["indirect"]):
+		var flat := Vector3(-node.global_transform.basis.z.x, 0.0, -node.global_transform.basis.z.z)
+		if flat.length() < 0.01:
+			flat = Vector3(0, 0, 1)
+		flat = flat.normalized()
+		var swung: Vector3 = Basis(Vector3.UP, gunner_yaw) * flat
+		var emin := deg_to_rad(float(spec["emin"]))
+		var emax := deg_to_rad(float(spec["emax"]))
+		var t := clampf((gunner_pitch - emin) / maxf(emax - emin, 0.01), 0.0, 1.0)
+		var dist := lerpf(rng, rng * 0.38, t)
+		var aim := node.global_position + swung * dist
+		aim.y = world._height(aim.x, aim.z)
+		return aim
+	var forward := Vector3(0, 0, -1)
+	if turret != null:
+		forward = -turret.global_transform.basis.z
+	return src + forward * rng
+
+
+func _gunner_fire() -> void:
+	var spec := _current_gun()
+	var u = _friendly_by_id(gunner_id)
+	if spec.is_empty() or u == null:
+		return
+	var st: Dictionary = _ensure_gun_state(gunner_id, gunner_slot, spec)
+	if float(st["cool"]) > 0.0 or float(st["reload"]) > 0.0 or bool(st["hot"]):
+		return
+	var mag := int(spec["mag"])
+	if mag > 0 and int(st["ammo"]) <= 0:
+		st["reload"] = float(spec["reload"])
+		st["ammo"] = mag
+		return
+	var node := _gun_node()
+	if node == null:
+		return
+	world.gunner_yaw = gunner_yaw
+	world.gunner_pitch = gunner_pitch
+	world._apply_gunner_turret(node)
+	var turret := node.get_node_or_null("turret") as Node3D
+	var src := node.global_position + Vector3(0, 1.6, 0)
+	if turret != null:
+		var muzzle := turret.get_node_or_null("muzzle") as Node3D
+		if muzzle != null:
+			src = muzzle.global_position
+	var aim := _gun_aim_point(node, spec)
+	var dmg := float(u["dmg"]) * float(spec["dmg_mul"])
+	sim.player_shot(gunner_id, src, aim, dmg, str(spec["profile"]), float(spec["rof"]), bool(spec["indirect"]))
+	_drain()
+	st["cool"] = 1.0 / maxf(float(spec["rof"]), 0.05)
+	if mag > 0:
+		st["ammo"] = int(st["ammo"]) - 1
+		if int(st["ammo"]) <= 0:
+			st["reload"] = maxf(float(spec["reload"]), 0.2)
+			st["ammo"] = mag
+	if float(spec["heat"]) > 0.0:
+		st["heat"] = float(st["heat"]) + float(spec["heat"])
+		if float(st["heat"]) >= 1.0:
+			st["heat"] = 1.0
+			st["hot"] = true
+
+
+func _apply_gunner_camera() -> void:
+	var node := _gun_node()
+	var spec := _current_gun()
+	if node == null or spec.is_empty() or world.cam == null:
+		return
+	var turret := node.get_node_or_null("turret") as Node3D
+	if turret == null:
+		return
+	var xf := turret.global_transform
+	var forward := -xf.basis.z
+	var right := xf.basis.x
+	var eye: Vector3
+	var look: Vector3
+	if bool(spec["indirect"]):
+		eye = xf.origin + Vector3.UP * 1.8 - forward * 0.6
+		look = _gun_aim_point(node, spec)
+	else:
+		eye = xf.origin - forward * 1.55 + right * 0.48 + Vector3.UP * 0.55
+		look = xf.origin + forward * 48.0
+	eye = world._keep_above(eye)
+	world.cam.global_position = eye
+	if eye.distance_to(look) > 0.25:
+		world.cam.look_at(look, Vector3.UP)
+	world.cam.fov = float(spec["zoom"]) if gunner_zoom else 55.0
+
+
+func _refresh_gunner_hud() -> void:
+	var u = _friendly_by_id(gunner_id)
+	var spec := _current_gun()
+	if u == null or spec.is_empty():
+		return
+	var st: Dictionary = _ensure_gun_state(gunner_id, gunner_slot, spec)
+	var slots: Array = Defs.gun_list(str(u["kind"]))
+	hud.refresh_gunner({
+		"vehicle": str(Defs.UNITS[str(u["kind"])]["name"]),
+		"weapon": str(spec["name"]),
+		"mag": int(spec["mag"]),
+		"ammo": int(st["ammo"]),
+		"heat": float(st["heat"]),
+		"heat_max": float(spec["heat"]),
+		"reload": float(st["reload"]),
+		"overheated": bool(st["hot"]),
+		"zoom": gunner_zoom,
+		"slots": slots.size(),
+	})
+
+
+func _aim_gunner_toward(point: Vector3) -> void:
+	var node := _gun_node()
+	var spec := _current_gun()
+	if node == null or spec.is_empty():
+		return
+	var local: Vector3 = node.to_local(point)
+	gunner_yaw = atan2(-local.x, -local.z)
+	var flat := Vector2(local.x, local.z).length()
+	gunner_pitch = atan2(local.y, maxf(flat, 0.1))
+	_clamp_gun_aim(spec)
+
+
 func _drive_input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
@@ -785,6 +1145,8 @@ func _on_ability(ability: String) -> void:
 
 
 func _camera_input(event: InputEvent) -> void:
+	if gunner_id >= 0:
+		return
 	if event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
 		if hud.hovering_ui():
 			return
@@ -812,6 +1174,9 @@ func _camera_input(event: InputEvent) -> void:
 func _on_escape() -> void:
 	match phase:
 		Phase.DRIVE:
+			if gunner_id >= 0:
+				_exit_gunner()
+				return
 			phase = Phase.PAUSE
 			hud.show_pause()
 		Phase.PAUSE:
@@ -832,6 +1197,7 @@ func _on_resume() -> void:
 
 
 func _finish(status: String) -> void:
+	_exit_gunner()
 	var won := status == "won"
 	if sandbox:
 		var sand: Dictionary = _active_level()
@@ -953,7 +1319,7 @@ func _sandbox_click(event: InputEvent) -> void:
 	var click := event as InputEventMouseButton
 	if not click.pressed or click.button_index != MOUSE_BUTTON_LEFT:
 		return
-	if hud.hovering_ui() or sim == null or sim.status != "running":
+	if hud.hovering_ui() or sim == null or sim.status != "running" or gunner_id >= 0:
 		return
 	var hit: Dictionary = world.pick_ground(click.position)
 	if not bool(hit["ok"]):
@@ -1016,6 +1382,8 @@ func _parse_args() -> void:
 			lands_dir = str(a).trim_prefix("--lands=")
 		elif str(a).begins_with("--gallery="):
 			gallery_dir = str(a).trim_prefix("--gallery=")
+		elif str(a).begins_with("--gunner="):
+			gunner_dir = str(a).trim_prefix("--gunner=")
 		elif str(a).begins_with("--sandboxshot="):
 			sandbox_shot = str(a).trim_prefix("--sandboxshot=")
 
@@ -1341,6 +1709,56 @@ func _catalog_run() -> void:
 		node.queue_free()
 		for _j in 2:
 			await get_tree().process_frame
+	get_tree().quit(0)
+
+
+func _gunner_run() -> void:
+	var level: Dictionary = Defs.levels()[0]
+	route = RouteScript.new(level)
+	camo = "desert"
+	world.show_level(level, route)
+	for body in world.slot_bodies:
+		body.visible = false
+	formation = [
+		Defs.make_unit("tank", Defs.CENTER, 0),
+		Defs.make_unit("humvee", Defs.CENTER - 1, 1),
+		Defs.make_unit("cargo", Defs.CENTER, 3),
+	]
+	sandbox = false
+	_start_drive(formation)
+	for _i in 8:
+		sim.tick(0.05)
+		_drain()
+	var lead := float(sim.friendlies[0]["s"])
+	var sm: Dictionary = route.sample(lead + 26.0)
+	var spot: Vector3 = sm["pos"] + sm["right"] * 7.0
+	sim.spawn_at("technical", spot)
+	_drain()
+	world.sync(sim, 0.05)
+	_enter_gunner(int(sim.friendlies[0]["id"]), false)
+	_aim_gunner_toward(spot + Vector3(0, 1.2, 0))
+	world.gunner_id = gunner_id
+	world.gunner_yaw = gunner_yaw
+	world.gunner_pitch = gunner_pitch
+	world.sync(sim, 0.05)
+	_apply_gunner_camera()
+	_refresh_gunner_hud()
+	hud.refresh_drive(sim, route)
+	for _j in 3:
+		await get_tree().process_frame
+	await _capture_to(gunner_dir, "gunner_tank")
+	_enter_gunner(int(sim.friendlies[1]["id"]), false)
+	_aim_gunner_toward(spot + Vector3(0, 1.4, 0))
+	world.gunner_id = gunner_id
+	world.gunner_yaw = gunner_yaw
+	world.gunner_pitch = gunner_pitch
+	world.sync(sim, 0.05)
+	_apply_gunner_camera()
+	_refresh_gunner_hud()
+	hud.refresh_drive(sim, route)
+	for _k in 3:
+		await get_tree().process_frame
+	await _capture_to(gunner_dir, "gunner_humvee")
 	get_tree().quit(0)
 
 

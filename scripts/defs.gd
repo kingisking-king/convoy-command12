@@ -191,6 +191,49 @@ const ENEMIES := {
 
 const CARD_ORDER := ["cargo", "humvee", "mrap", "apc", "tank", "aa", "mortar", "repair", "fuel", "engineer", "escort", "medic"]
 
+# Player gunner weapons. Damage is a multiple of the unit's own shell so the
+# column's AI numbers stay put. yaw/emin/emax are degrees from the hull.
+const GUNS := {
+	"humvee": [
+		{"name": "Turret MG", "auto": true, "rof": 8.0, "dmg_mul": 0.38, "profile": "light", "heat": 0.045, "cool": 0.28, "mag": 0, "reload": 0.0, "yaw": 125.0, "emin": -12.0, "emax": 48.0, "zoom": 24.0, "rng": 36.0, "indirect": false},
+	],
+	"mrap": [
+		{"name": "RWS", "auto": true, "rof": 7.0, "dmg_mul": 0.42, "profile": "light", "heat": 0.04, "cool": 0.30, "mag": 0, "reload": 0.0, "yaw": 180.0, "emin": -15.0, "emax": 55.0, "zoom": 22.0, "rng": 38.0, "indirect": false},
+	],
+	"apc": [
+		{"name": "Autocannon", "auto": true, "rof": 4.5, "dmg_mul": 0.40, "profile": "medium", "heat": 0.0, "cool": 0.0, "mag": 28, "reload": 2.3, "yaw": 180.0, "emin": -8.0, "emax": 42.0, "zoom": 18.0, "rng": 40.0, "indirect": false},
+	],
+	"tank": [
+		{"name": "Main Gun", "auto": false, "rof": 0.42, "dmg_mul": 1.0, "profile": "heavy", "heat": 0.0, "cool": 0.0, "mag": 6, "reload": 3.1, "yaw": 180.0, "emin": -6.0, "emax": 18.0, "zoom": 12.0, "rng": 48.0, "indirect": false},
+		{"name": "Coax", "auto": true, "rof": 9.0, "dmg_mul": 0.16, "profile": "light", "heat": 0.05, "cool": 0.32, "mag": 0, "reload": 0.0, "yaw": 180.0, "emin": -8.0, "emax": 22.0, "zoom": 16.0, "rng": 30.0, "indirect": false},
+	],
+	"aa": [
+		{"name": "AA Guns", "auto": true, "rof": 12.0, "dmg_mul": 0.40, "profile": "aa", "heat": 0.032, "cool": 0.24, "mag": 0, "reload": 0.0, "yaw": 180.0, "emin": -5.0, "emax": 78.0, "zoom": 14.0, "rng": 58.0, "indirect": false},
+	],
+	"mortar": [
+		{"name": "Mortar", "auto": false, "rof": 0.28, "dmg_mul": 1.0, "profile": "heavy", "heat": 0.0, "cool": 0.0, "mag": 4, "reload": 3.4, "yaw": 32.0, "emin": 42.0, "emax": 72.0, "zoom": 32.0, "rng": 68.0, "indirect": true},
+	],
+	"engineer": [
+		{"name": "Pintle MG", "auto": true, "rof": 7.5, "dmg_mul": 0.55, "profile": "light", "heat": 0.05, "cool": 0.30, "mag": 0, "reload": 0.0, "yaw": 110.0, "emin": -10.0, "emax": 40.0, "zoom": 26.0, "rng": 30.0, "indirect": false},
+	],
+	"escort": [
+		{"name": "Door Gun", "auto": true, "rof": 8.5, "dmg_mul": 0.40, "profile": "light", "heat": 0.04, "cool": 0.26, "mag": 0, "reload": 0.0, "yaw": 70.0, "emin": -42.0, "emax": 14.0, "zoom": 20.0, "rng": 44.0, "indirect": false},
+	],
+}
+
+
+static func gun_list(kind: String) -> Array:
+	if not GUNS.has(kind):
+		return []
+	return GUNS[kind]
+
+
+static func gun_spec(kind: String, slot: int) -> Dictionary:
+	var list: Array = gun_list(kind)
+	if slot < 0 or slot >= list.size():
+		return {}
+	return list[slot]
+
 static func levels() -> Array:
 	return [
 		{

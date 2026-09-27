@@ -107,6 +107,13 @@ var spawn_pick: OptionButton
 var mission_box: PanelContainer
 var mission_list: VBoxContainer
 var sandbox_sync := false
+var gunner_box: Control
+var gunner_title: Label
+var gunner_ammo: Label
+var gunner_state: Label
+var gunner_heat: ProgressBar
+var gunner_cross: Control
+var gunner_on := false
 
 func setup(p_audio) -> void:
 	audio = p_audio
@@ -123,6 +130,7 @@ func setup(p_audio) -> void:
 	_build_brief()
 	_build_build()
 	_build_drive()
+	_build_gunner()
 	_build_pause()
 	_build_results()
 	banner = Label.new()
@@ -183,9 +191,10 @@ func typing() -> bool:
 
 
 func hide_all() -> void:
-	for panel in [menu_box, sandbox_box, sandbox_drive, help_box, brief_box, build_top, build_dock, build_bottom, drive_top, drive_bottom, pause_box, result_box, mission_box]:
+	for panel in [menu_box, sandbox_box, sandbox_drive, help_box, brief_box, build_top, build_dock, build_bottom, drive_top, drive_bottom, pause_box, result_box, mission_box, gunner_box]:
 		panel.visible = false
 	map.visible = false
+	gunner_on = false
 
 
 func show_menu(bank: int, level_index: int, level_count: int, campaign_done: bool) -> void:
@@ -355,13 +364,15 @@ func refresh_drive(sim, p_route) -> void:
 	drive_cargo.text = cargo_text
 	drive_hp.text = "Column  %d%%" % int(100.0 * hp / maxf(mx, 1.0))
 	drive_hostiles.text = "Hostiles  %d" % sim.living_hostiles()
-	if bool(sim.sandbox):
+	if gunner_on:
+		drive_hint.text = "Mouse aim    LMB fire    RMB scope    wheel weapon    Tab next    G exit"
+	elif bool(sim.sandbox):
 		var god_note := "    God mode" if bool(sim.god_mode) else ""
-		drive_hint.text = "Left click the ground to spawn" + god_note
+		drive_hint.text = "G or click a gun to man it. Left click the ground to spawn" + god_note
 	elif sim.smoke_timer > 0.0:
-		drive_hint.text = "Smoke is up"
+		drive_hint.text = "Smoke is up.  G takes a gun."
 	else:
-		drive_hint.text = "Q smoke    E airstrike    R repair"
+		drive_hint.text = "G gunner    Q smoke    E airstrike    R repair"
 	smoke_button.text = "SMOKE  x%d" % int(sim.charges["smoke"])
 	strike_button.text = "AIRSTRIKE  x%d" % int(sim.charges["airstrike"])
 	repair_button.text = "REPAIR  x%d" % int(sim.charges["repair"])
@@ -389,6 +400,93 @@ func show_pause() -> void:
 
 func hide_pause() -> void:
 	pause_box.visible = false
+
+
+func _build_gunner() -> void:
+	gunner_box = Control.new()
+	gunner_box.set_anchors_preset(Control.PRESET_FULL_RECT)
+	gunner_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gunner_box.visible = false
+	root.add_child(gunner_box)
+	gunner_cross = Control.new()
+	gunner_cross.set_anchors_preset(Control.PRESET_CENTER)
+	gunner_cross.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gunner_box.add_child(gunner_cross)
+	for bar in [{"p": Vector2(-18, -1), "s": Vector2(10, 2)}, {"p": Vector2(8, -1), "s": Vector2(10, 2)}, {"p": Vector2(-1, -18), "s": Vector2(2, 10)}, {"p": Vector2(-1, 8), "s": Vector2(2, 10)}]:
+		var mark := ColorRect.new()
+		mark.color = Color(0.95, 0.9, 0.72, 0.92)
+		mark.position = bar["p"]
+		mark.size = bar["s"]
+		mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		gunner_cross.add_child(mark)
+	var dot := ColorRect.new()
+	dot.color = Color(0.95, 0.55, 0.28, 0.95)
+	dot.position = Vector2(-1, -1)
+	dot.size = Vector2(2, 2)
+	dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gunner_cross.add_child(dot)
+	var readout := VBoxContainer.new()
+	readout.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	readout.offset_left = -180
+	readout.offset_right = 180
+	readout.offset_top = -118
+	readout.offset_bottom = -28
+	readout.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gunner_box.add_child(readout)
+	gunner_title = Label.new()
+	gunner_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	gunner_title.add_theme_font_size_override("font_size", 20)
+	gunner_title.add_theme_color_override("font_color", Color("f2d48a"))
+	readout.add_child(gunner_title)
+	gunner_ammo = Label.new()
+	gunner_ammo.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	gunner_ammo.add_theme_font_size_override("font_size", 18)
+	readout.add_child(gunner_ammo)
+	gunner_heat = ProgressBar.new()
+	gunner_heat.max_value = 100
+	gunner_heat.show_percentage = false
+	gunner_heat.custom_minimum_size = Vector2(220, 10)
+	readout.add_child(gunner_heat)
+	gunner_state = Label.new()
+	gunner_state.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	gunner_state.add_theme_color_override("font_color", Color("e7e1cf"))
+	readout.add_child(gunner_state)
+
+
+func refresh_gunner(info: Dictionary) -> void:
+	gunner_on = true
+	gunner_box.visible = true
+	gunner_title.text = "%s  ·  %s" % [str(info.get("vehicle", "")), str(info.get("weapon", ""))]
+	var mag := int(info.get("mag", 0))
+	if mag > 0:
+		gunner_ammo.text = "Ammo  %d / %d" % [int(info.get("ammo", 0)), mag]
+	else:
+		gunner_ammo.text = "Belt"
+	gunner_heat.value = float(info.get("heat", 0.0)) * 100.0
+	gunner_heat.visible = float(info.get("heat_max", 0.0)) > 0.0
+	var note := ""
+	if bool(info.get("overheated", false)):
+		note = "OVERHEATED"
+	elif float(info.get("reload", 0.0)) > 0.0:
+		note = "RELOADING  %.1f" % float(info.get("reload", 0.0))
+	elif bool(info.get("zoom", false)):
+		note = "SCOPED"
+	elif int(info.get("slots", 1)) > 1:
+		note = "Wheel switches weapon"
+	gunner_state.text = note
+	var gap := 8.0 if bool(info.get("zoom", false)) else 14.0
+	var marks := gunner_cross.get_children()
+	if marks.size() >= 4:
+		(marks[0] as ColorRect).position = Vector2(-gap - 10.0, -1)
+		(marks[1] as ColorRect).position = Vector2(gap, -1)
+		(marks[2] as ColorRect).position = Vector2(-1, -gap - 10.0)
+		(marks[3] as ColorRect).position = Vector2(-1, gap)
+
+
+func hide_gunner() -> void:
+	gunner_on = false
+	if gunner_box:
+		gunner_box.visible = false
 
 
 func show_results(payload: Dictionary) -> void:
@@ -784,7 +882,7 @@ func _build_help() -> void:
 	box.add_child(title)
 	help_body = Label.new()
 	help_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	help_body.text = "Arm a formation, then ride it to the drop.\n\nBuild\n1-9, 0, minus and equals pick a unit. Left click anywhere in the yard to place it. Drag a vehicle to move it. Right click removes it. R rotates. Q fills a suggested wedge. Enter deploys.\nThere is no lane cap. Wide lines and clusters keep their spacing while they drive.\nFuel stretches smoke and returns a charge. Engineers clear IEDs. Mortars splash. The escort helicopter flies with the column. Medevac heals. Bring at least one cargo truck.\n\nDrive\nGuns fire on their own. Right-drag orbits the camera, the wheel zooms, F snaps back. A/D orbit, W/S zoom.\nQ smoke — thick cover, hostiles miss more.\nE airstrike — a jet, then a blast on the densest group. It does not hit your trucks.\nR field repair — a burst of healing.\nEsc pauses.\n\nDeliver at least one cargo truck. Lose if they all die. Pay rolls into the next mission's budget.\n\nSandbox, from the main menu, gives an unlimited budget on any map. Choose the attackers, a difficulty, god mode, and the game speed. Left click spawns a hostile. Restart Drive runs the same column again. Sandbox does not change the campaign."
+	help_body.text = "Arm a formation, then ride it to the drop.\n\nBuild\n1-9, 0, minus and equals pick a unit. Left click anywhere in the yard to place it. Drag a vehicle to move it. Right click removes it. R rotates. Q fills a suggested wedge. Enter deploys.\nThere is no lane cap. Wide lines and clusters keep their spacing while they drive.\nFuel stretches smoke and returns a charge. Engineers clear IEDs. Mortars splash. The escort helicopter flies with the column. Medevac heals. Bring at least one cargo truck.\n\nDrive\nGuns fire on their own. Press G, or click an armed vehicle, to take that gun. The column, including your vehicle, keeps driving. Mouse aims, left click fires, right click scopes. Tab changes gun, the wheel changes weapon on a tank, G leaves the seat.\nRight-drag orbits the camera, the wheel zooms, F snaps back. A/D orbit, W/S zoom.\nQ smoke — thick cover, hostiles miss more.\nE airstrike — a jet, then a blast on the densest group. It does not hit your trucks.\nR field repair — a burst of healing.\nEsc pauses.\n\nDeliver at least one cargo truck. Lose if they all die. Pay rolls into the next mission's budget.\n\nSandbox, from the main menu, gives an unlimited budget on any map. Choose the attackers, a difficulty, god mode, and the game speed. Left click spawns a hostile. Restart Drive runs the same column again. Sandbox does not change the campaign."
 	box.add_child(help_body)
 	box.add_child(_button("Back", back_pressed))
 
