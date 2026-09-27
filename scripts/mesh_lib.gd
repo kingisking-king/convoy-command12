@@ -1,255 +1,602 @@
 extends RefCounted
 
-const OLIVE := Color("55612e")
-const OLIVE_DARK := Color("3c4422")
-const TAN := Color("c6b27a")
-const CANVAS := Color("b7a56b")
-const RUBBER := Color("1a1b18")
-const METAL := Color("8a8f8c")
-const GLASS := Color("8fb4c2")
-const STEEL := Color("3a3f44")
-const ENEMY := Color("7a332c")
-const ENEMY_DARK := Color("4e221e")
-const RUST := Color("8d5334")
-const CARGO_RED := Color("8e3a32")
+const Defs = preload("res://scripts/defs.gd")
+const Hard = preload("res://scripts/hard_surface.gd")
 
+var scheme := "woodland"
+var _hard := Hard.new()
+var _packed := {}
+var _tex := {}
 var _mats := {}
-var _boxes := {}
+var _wheel_i := 0
 
 
-func mat(color: Color, rough: float = 0.9) -> StandardMaterial3D:
-	var key := "%s|%.2f" % [color.to_html(), rough]
+func build(kind: String, enemy: bool = false, camo_name: String = "") -> Node3D:
+	if camo_name != "":
+		scheme = camo_name
+	_wheel_i = 0
+	var root := Node3D.new()
+	root.name = kind
+	var paint := "hostile" if enemy else scheme
+	match kind:
+		"cargo":
+			_kenney(root, "res://assets/cc0/vehicles/delivery.glb", 1.62, paint, enemy)
+			_flag(root, Vector3(0, 2.55, 0.2))
+		"humvee":
+			_kenney(root, "res://assets/cc0/vehicles/suv.glb", 1.85, paint, enemy)
+			_gun_turret(root, Vector3(0, 2.05, 0.15), 1.15, 0.045, paint)
+		"apc":
+			_apc(root, paint)
+		"tank":
+			_tank(root, paint)
+		"aa":
+			_kenney(root, "res://assets/cc0/vehicles/truck.glb", 1.7, paint, enemy)
+			_aa_mount(root, paint)
+		"repair":
+			_kenney(root, "res://assets/cc0/vehicles/van.glb", 1.7, paint, enemy)
+			_repair_kit(root)
+		"technical":
+			_kenney(root, "res://assets/cc0/vehicles/truck-flat.glb", 1.75, "hostile", true)
+			_gun_turret(root, Vector3(0, 1.7, 0.55), 1.05, 0.04, "hostile")
+			var crew := _person(true, false)
+			crew.position = Vector3(0.15, 1.15, 0.35)
+			crew.scale = Vector3.ONE * 0.72
+			root.add_child(crew)
+		"infantry":
+			root.add_child(_person(enemy, false))
+		"rpg":
+			var a := _person(enemy, true)
+			a.position = Vector3(-0.45, 0, 0)
+			root.add_child(a)
+			var b := _person(enemy, false)
+			b.position = Vector3(0.5, 0, -0.2)
+			root.add_child(b)
+			_muzzle(root, Vector3(-0.2, 1.45, -0.7))
+		"heli":
+			_heli(root)
+		_:
+			_kenney(root, "res://assets/cc0/vehicles/truck.glb", 1.6, paint, enemy)
+	if kind != "infantry" and kind != "rpg" and kind != "heli":
+		_dust(root, 2.1)
+	if kind == "heli":
+		_wash(root)
+	_blob(root, 2.2 if kind == "tank" or kind == "heli" else 1.6)
+	return root
+
+
+func mat(color: Color) -> StandardMaterial3D:
+	var key := "solid:%s" % color
 	if _mats.has(key):
 		return _mats[key]
 	var m := StandardMaterial3D.new()
 	m.albedo_color = color
-	m.roughness = rough
-	m.metallic = 0.04
-	m.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	m.roughness = 0.92
 	_mats[key] = m
 	return m
 
 
-func build(kind: String, enemy: bool = false) -> Node3D:
+func puff(color: Color, lit: bool) -> QuadMesh:
+	return _puff(color, lit)
+
+
+func outpost() -> Node3D:
 	var root := Node3D.new()
-	root.name = kind
-	match kind:
-		"cargo":
-			_cargo(root)
-		"humvee":
-			_humvee(root, enemy)
-		"apc":
-			_apc(root, enemy)
-		"tank":
-			_tank(root, enemy)
-		"aa":
-			_aa(root, enemy)
-		"repair":
-			_repair(root)
-		"infantry":
-			_soldier(root, enemy, false)
-		"rpg":
-			_soldier(root, enemy, true)
-		"technical":
-			_technical(root)
-		"heli":
-			_heli(root)
-		_:
-			_box(root, Vector3(1.5, 1, 3), Vector3.ZERO, OLIVE)
-	_blob(root)
+	root.name = "outpost"
+	var walls := _surf()
+	_hard.add_bevel_box(walls, Vector3(0, 1.35, 0), Vector3(4.4, 2.5, 3.6), 0.14)
+	_hard.add_bevel_box(walls, Vector3(0, 2.72, 0), Vector3(4.7, 0.22, 3.9), 0.06)
+	_commit(root, walls, scheme if scheme != "" else "olive")
+	var glass := _surf()
+	_hard.add_bevel_box(glass, Vector3(-0.7, 1.55, -1.82), Vector3(0.9, 0.7, 0.06), 0.02)
+	_hard.add_bevel_box(glass, Vector3(0.85, 1.55, -1.82), Vector3(0.9, 0.7, 0.06), 0.02)
+	_commit(root, glass, "glass")
+	var door := _surf()
+	_hard.add_bevel_box(door, Vector3(0.05, 0.7, -1.84), Vector3(0.7, 1.3, 0.08), 0.03)
+	_commit(root, door, "dark")
 	return root
 
 
-func _cargo(root: Node3D) -> void:
-	_box(root, Vector3(1.85, 1.15, 1.7), Vector3(0, 0.95, -1.7), OLIVE)
-	_box(root, Vector3(1.55, 0.7, 1.15), Vector3(0, 1.7, -1.85), OLIVE_DARK)
-	_box(root, Vector3(1.2, 0.55, 0.08), Vector3(0, 1.75, -2.45), GLASS)
-	_box(root, Vector3(1.9, 0.85, 3.3), Vector3(0, 0.85, 0.85), OLIVE_DARK)
-	_box(root, Vector3(1.75, 0.7, 3.05), Vector3(0, 1.55, 0.85), CANVAS)
-	_box(root, Vector3(0.08, 1.5, 0.08), Vector3(-0.7, 2.4, 0.2), STEEL)
-	var flag := _box(root, Vector3(0.7, 0.38, 0.05), Vector3(-0.35, 2.95, 0.2), Color("e2b84a"))
-	flag.name = "beacon"
-	_wheels(root, [Vector3(-0.85, 0.42, -1.7), Vector3(0.85, 0.42, -1.7), Vector3(-0.85, 0.42, 0.3), Vector3(0.85, 0.42, 0.3), Vector3(-0.85, 0.42, 1.7), Vector3(0.85, 0.42, 1.7)], 0.42)
+func prop(kind: String) -> Node3D:
+	var path := ""
+	match kind:
+		"pine":
+			path = "res://assets/cc0/nature/tree_pineDefaultA.glb"
+		"oak":
+			path = "res://assets/cc0/nature/tree_oak.glb"
+		"palm":
+			path = "res://assets/cc0/nature/tree_palmTall.glb"
+		"cactus":
+			path = "res://assets/cc0/nature/cactus_tall.glb"
+		"rock":
+			path = "res://assets/cc0/nature/rock_largeA.glb"
+		"rock_b":
+			path = "res://assets/cc0/nature/rock_largeB.glb"
+		_:
+			path = "res://assets/cc0/nature/tree_detailed.glb"
+	var root := _instantiate(path)
+	root.name = kind
+	return root
 
 
-func _humvee(root: Node3D, enemy: bool) -> void:
-	var body: Color = ENEMY if enemy else OLIVE
-	var dark: Color = ENEMY_DARK if enemy else OLIVE_DARK
-	_box(root, Vector3(1.9, 0.7, 3.7), Vector3(0, 0.75, 0.1), body)
-	_box(root, Vector3(1.6, 0.62, 1.5), Vector3(0, 1.35, -0.35), dark)
-	_box(root, Vector3(1.35, 0.42, 0.06), Vector3(0, 1.4, -1.12), GLASS)
-	_wheels(root, [Vector3(-0.95, 0.4, -1.25), Vector3(0.95, 0.4, -1.25), Vector3(-0.95, 0.4, 1.2), Vector3(0.95, 0.4, 1.2)], 0.4)
-	var turret := _turret(root, Vector3(0, 1.25, 0.85), 1.35, 0.07, METAL, 0.0)
-	_box(turret, Vector3(0.7, 0.28, 0.7), Vector3(0, 0.05, 0), STEEL)
+func _kenney(root: Node3D, path: String, scale: float, paint: String, enemy: bool) -> void:
+	var holder := Node3D.new()
+	holder.name = "body"
+	holder.rotation_degrees = Vector3(0, 180, 0)
+	holder.scale = Vector3.ONE * scale
+	var inst := _instantiate(path)
+	var spare := inst.find_child("wheel-back", true, false)
+	if spare != null and str(spare.name) == "wheel-back":
+		spare.name = "spare"
+	holder.add_child(inst)
+	root.add_child(holder)
+	_tint_tree(inst, paint, enemy)
 
 
-func _apc(root: Node3D, enemy: bool) -> void:
-	var body: Color = ENEMY if enemy else Color("4a5630")
-	_box(root, Vector3(2.15, 1.05, 4.5), Vector3(0, 0.9, 0.1), body)
-	_box(root, Vector3(1.7, 0.45, 1.2), Vector3(0, 1.15, -1.7), body.darkened(0.15))
-	_wheels(root, [Vector3(-1.05, 0.42, -1.4), Vector3(1.05, 0.42, -1.4), Vector3(-1.05, 0.42, 0.1), Vector3(1.05, 0.42, 0.1), Vector3(-1.05, 0.42, 1.5), Vector3(1.05, 0.42, 1.5)], 0.42)
-	var turret := _turret(root, Vector3(0, 1.5, -0.2), 1.7, 0.09, METAL, 0.0)
-	_box(turret, Vector3(1.15, 0.42, 1.35), Vector3(0, 0.15, 0.1), STEEL)
+func _apc(root: Node3D, paint: String) -> void:
+	var camo := _surf()
+	var metal := _surf()
+	var glass := _surf()
+	_hard.add_bevel_box(camo, Vector3(0, 1.05, 0.1), Vector3(2.35, 1.05, 5.3), 0.12)
+	_hard.add_bevel_box(camo, Vector3(0, 1.25, -1.85), Vector3(2.15, 0.7, 1.7), 0.1, Vector3(-22, 0, 0))
+	_hard.add_bevel_box(camo, Vector3(0, 1.62, 0.35), Vector3(1.7, 0.28, 2.4), 0.06)
+	_hard.add_bevel_box(glass, Vector3(0, 1.35, -2.45), Vector3(1.15, 0.28, 0.08), 0.02, Vector3(-28, 0, 0))
+	_hard.add_cylinder(metal, 0.06, 0.08, Vector3(-0.7, 0.95, -2.55), Vector3(90, 0, 0), 12)
+	_hard.add_cylinder(metal, 0.06, 0.08, Vector3(0.7, 0.95, -2.55), Vector3(90, 0, 0), 12)
+	_commit(root, camo, paint)
+	_commit(root, metal, "metal")
+	_commit(root, glass, "glass")
+	for z in [-1.7, -0.45, 0.8, 2.05]:
+		_glb_wheel(root, Vector3(-1.15, 0.42, z), 1.25)
+		_glb_wheel(root, Vector3(1.15, 0.42, z), 1.25)
+	_gun_turret(root, Vector3(0, 1.85, -0.15), 1.7, 0.07, paint)
 
 
-func _tank(root: Node3D, enemy: bool) -> void:
-	var body: Color = ENEMY_DARK if enemy else Color("3e4a28")
-	_box(root, Vector3(2.5, 0.55, 5.1), Vector3(0, 0.7, 0), body)
-	_box(root, Vector3(0.45, 0.7, 5.0), Vector3(-1.15, 0.75, 0), RUBBER)
-	_box(root, Vector3(0.45, 0.7, 5.0), Vector3(1.15, 0.75, 0), RUBBER)
-	_box(root, Vector3(1.5, 0.35, 1.1), Vector3(0, 0.85, -2.0), body.lightened(0.08))
-	var turret := _turret(root, Vector3(0, 1.25, -0.15), 2.5, 0.1, Color("2c3130"), 0.0)
-	_box(turret, Vector3(1.45, 0.5, 1.8), Vector3(0, 0.2, 0.15), STEEL)
+func _tank(root: Node3D, paint: String) -> void:
+	var camo := _surf()
+	var rubber := _surf()
+	var metal := _surf()
+	_hard.add_bevel_box(camo, Vector3(0, 0.78, 0.05), Vector3(2.05, 0.62, 4.35), 0.14)
+	_hard.add_bevel_box(camo, Vector3(0, 1.02, -1.72), Vector3(1.9, 0.48, 1.35), 0.1, Vector3(-28, 0, 0))
+	_hard.add_bevel_box(camo, Vector3(0, 0.92, 1.85), Vector3(1.7, 0.36, 0.95), 0.08, Vector3(18, 0, 0))
+	_hard.add_bevel_box(camo, Vector3(-1.05, 0.72, 0.05), Vector3(0.18, 0.22, 3.6), 0.04)
+	_hard.add_bevel_box(camo, Vector3(1.05, 0.72, 0.05), Vector3(0.18, 0.22, 3.6), 0.04)
+	_hard.add_track(rubber, -1.28, 4.7, 0.48, 0.34)
+	_hard.add_track(rubber, 1.28, 4.7, 0.48, 0.34)
+	_commit(root, camo, paint)
+	_commit(root, rubber, "rubber")
+	for z in [-1.55, -0.7, 0.15, 1.0, 1.75]:
+		_road_wheel(root, Vector3(-1.28, 0.48, z))
+		_road_wheel(root, Vector3(1.28, 0.48, z))
+	var turret := Node3D.new()
+	turret.name = "turret"
+	turret.position = Vector3(0, 1.28, -0.05)
+	root.add_child(turret)
+	var body := _surf()
+	var gun := _surf()
+	var profile := PackedVector2Array([
+		Vector2(0.2, 0.62),
+		Vector2(0.72, 0.48),
+		Vector2(1.02, 0.28),
+		Vector2(1.12, 0.08),
+		Vector2(1.02, -0.08),
+		Vector2(0.55, -0.16),
+	])
+	_hard.add_lathe(body, profile, Vector3(0, 0.15, 0.1), Vector3.ZERO, 22)
+	_hard.add_lathe(body, PackedVector2Array([
+		Vector2(0.08, 0.22),
+		Vector2(0.22, 0.12),
+		Vector2(0.2, 0.0),
+	]), Vector3(-0.55, 0.55, 0.15), Vector3.ZERO, 12)
+	_hard.add_bevel_box(body, Vector3(0.15, 0.42, 0.55), Vector3(0.7, 0.28, 0.85), 0.06)
+	_hard.add_cylinder(gun, 0.075, 2.5, Vector3(0, 0.38, -1.35), Vector3(90, 0, 0), 16)
+	_hard.add_cylinder(gun, 0.12, 0.22, Vector3(0, 0.38, -2.55), Vector3(90, 0, 0), 16)
+	_hard.add_cylinder(gun, 0.035, 0.7, Vector3(0.28, 0.48, -0.35), Vector3(90, 0, 0), 10)
+	_commit(turret, body, paint)
+	_commit(turret, gun, "metal")
+	_muzzle(turret, Vector3(0, 0.38, -2.7))
+	_hard.add_cylinder(metal, 0.05, 0.06, Vector3(-0.45, 0.95, -2.35), Vector3(90, 0, 0), 10)
+	_hard.add_cylinder(metal, 0.05, 0.06, Vector3(0.45, 0.95, -2.35), Vector3(90, 0, 0), 10)
+	_commit(root, metal, "lamp")
 
 
-func _aa(root: Node3D, enemy: bool) -> void:
-	var body: Color = ENEMY if enemy else Color("5d6840")
-	_box(root, Vector3(1.9, 0.7, 4.0), Vector3(0, 0.75, 0.15), body)
-	_box(root, Vector3(1.4, 0.55, 1.2), Vector3(0, 1.3, -1.15), body.darkened(0.12))
-	_wheels(root, [Vector3(-0.95, 0.4, -1.2), Vector3(0.95, 0.4, -1.2), Vector3(-0.95, 0.4, 1.15), Vector3(0.95, 0.4, 1.15)], 0.4)
-	var turret := _turret(root, Vector3(0, 1.25, 0.55), 1.55, 0.06, METAL, -38.0)
-	var left := _box(turret, Vector3(0.08, 0.08, 1.5), Vector3(-0.18, 0.28, -0.55), Color("d7d2c4"))
-	left.rotation_degrees = Vector3(-38, 0, 0)
-	var right := _box(turret, Vector3(0.08, 0.08, 1.5), Vector3(0.18, 0.28, -0.55), Color("d7d2c4"))
-	right.rotation_degrees = Vector3(-38, 0, 0)
-
-
-func _repair(root: Node3D) -> void:
-	_box(root, Vector3(1.8, 1.05, 1.6), Vector3(0, 0.9, -1.55), Color("2f5e48"))
-	_box(root, Vector3(1.45, 0.6, 1.05), Vector3(0, 1.6, -1.65), Color("244a38"))
-	_box(root, Vector3(1.85, 0.7, 2.8), Vector3(0, 0.85, 0.85), Color("3d6b52"))
-	_box(root, Vector3(0.12, 0.7, 0.12), Vector3(0, 1.55, 0.7), Color("e8f0ea"))
-	_box(root, Vector3(0.62, 0.12, 0.12), Vector3(0, 1.55, 0.7), Color("e8f0ea"))
-	_box(root, Vector3(0.1, 0.1, 1.4), Vector3(0.55, 1.7, 0.2), METAL)
-	_wheels(root, [Vector3(-0.85, 0.4, -1.5), Vector3(0.85, 0.4, -1.5), Vector3(-0.85, 0.4, 0.4), Vector3(0.85, 0.4, 0.4), Vector3(-0.85, 0.4, 1.6), Vector3(0.85, 0.4, 1.6)], 0.4)
-
-
-func _technical(root: Node3D) -> void:
-	_box(root, Vector3(1.7, 0.55, 3.4), Vector3(0, 0.7, 0.1), RUST)
-	_box(root, Vector3(1.45, 0.55, 1.15), Vector3(0, 1.2, -0.85), ENEMY_DARK)
-	_box(root, Vector3(1.55, 0.35, 1.5), Vector3(0, 0.95, 0.95), Color("6a3a28"))
-	_wheels(root, [Vector3(-0.8, 0.38, -1.15), Vector3(0.8, 0.38, -1.15), Vector3(-0.8, 0.38, 1.1), Vector3(0.8, 0.38, 1.1)], 0.38)
-	_turret(root, Vector3(0, 1.25, 0.9), 1.15, 0.06, STEEL, 0.0)
-
-
-func _soldier(root: Node3D, enemy: bool, rpg: bool) -> void:
-	var cloth: Color = ENEMY if enemy else OLIVE
-	_box(root, Vector3(0.42, 0.7, 0.28), Vector3(0, 0.85, 0), cloth)
-	_box(root, Vector3(0.28, 0.28, 0.28), Vector3(0, 1.38, 0), Color("c9a27a"))
-	_box(root, Vector3(0.16, 0.45, 0.16), Vector3(-0.18, 0.45, 0), cloth)
-	_box(root, Vector3(0.16, 0.45, 0.16), Vector3(0.18, 0.45, 0), cloth)
-	if rpg:
-		_box(root, Vector3(0.1, 0.1, 1.15), Vector3(0.22, 1.15, -0.35), Color("2a2a28"))
-	else:
-		_box(root, Vector3(0.08, 0.08, 0.7), Vector3(0.2, 1.05, -0.25), STEEL)
-	var muzzle := Marker3D.new()
-	muzzle.name = "muzzle"
-	muzzle.position = Vector3(0.2, 1.1, -0.7)
-	root.add_child(muzzle)
+func _aa_mount(root: Node3D, paint: String) -> void:
+	var turret := Node3D.new()
+	turret.name = "turret"
+	turret.position = Vector3(0, 1.85, 0.35)
+	root.add_child(turret)
+	var body := _surf()
+	var gun := _surf()
+	_hard.add_cylinder(body, 0.42, 0.16, Vector3(0, 0.08, 0), Vector3.ZERO, 16)
+	_hard.add_bevel_box(body, Vector3(0, 0.32, 0.05), Vector3(0.7, 0.28, 0.5), 0.05)
+	_hard.add_cylinder(gun, 0.045, 1.7, Vector3(-0.14, 0.48, -0.75), Vector3(90, 0, 0), 14)
+	_hard.add_cylinder(gun, 0.045, 1.7, Vector3(0.14, 0.48, -0.75), Vector3(90, 0, 0), 14)
+	_hard.add_torus(gun, 0.28, 0.035, Vector3(0, 0.85, 0.05), Vector3(90, 0, 0), 16, 8)
+	_commit(turret, body, paint)
+	_commit(turret, gun, "metal")
+	_muzzle(turret, Vector3(0, 0.48, -1.6))
 
 
 func _heli(root: Node3D) -> void:
-	_box(root, Vector3(1.3, 0.7, 2.6), Vector3(0, 0, -0.2), ENEMY)
-	_box(root, Vector3(0.9, 0.4, 0.7), Vector3(0, 0.35, -0.7), GLASS)
-	_box(root, Vector3(0.28, 0.28, 2.3), Vector3(0, 0.1, 1.8), ENEMY_DARK)
-	_box(root, Vector3(1.4, 0.08, 0.18), Vector3(0, 0.15, 2.85), STEEL)
-	_box(root, Vector3(0.08, 0.55, 0.08), Vector3(1.25, 0.15, 2.85), STEEL)
-	_box(root, Vector3(2.4, 0.08, 0.28), Vector3(0, -0.45, -0.2), STEEL)
+	var body := _surf()
+	var glass := _surf()
+	var metal := _surf()
+	var profile := PackedVector2Array([
+		Vector2(0.02, -1.85),
+		Vector2(0.22, -1.55),
+		Vector2(0.48, -1.15),
+		Vector2(0.62, -0.55),
+		Vector2(0.58, 0.05),
+		Vector2(0.36, 0.7),
+		Vector2(0.16, 1.45),
+		Vector2(0.07, 2.55),
+	])
+	_hard.add_lathe(body, profile, Vector3.ZERO, Vector3(90, 0, 0), 18)
+	var cockpit := PackedVector2Array([
+		Vector2(0.05, -0.35),
+		Vector2(0.32, -0.1),
+		Vector2(0.28, 0.25),
+		Vector2(0.08, 0.4),
+	])
+	_hard.add_lathe(glass, cockpit, Vector3(0, 0.18, -0.85), Vector3(90, 0, 0), 14)
+	_hard.add_bevel_box(body, Vector3(0, 0.35, 2.15), Vector3(0.12, 0.55, 0.7), 0.04)
+	_hard.add_bevel_box(body, Vector3(0, 0.55, 2.35), Vector3(1.3, 0.06, 0.28), 0.02)
+	_hard.add_cylinder(metal, 0.035, 1.7, Vector3(-0.55, -0.28, 0.1), Vector3(0, 0, 90), 8)
+	_hard.add_cylinder(metal, 0.035, 1.7, Vector3(0.55, -0.28, 0.1), Vector3(0, 0, 90), 8)
+	_hard.add_cylinder(metal, 0.08, 0.9, Vector3(-0.72, -0.05, -0.2), Vector3(0, 0, 90), 10)
+	_hard.add_cylinder(metal, 0.08, 0.9, Vector3(0.72, -0.05, -0.2), Vector3(0, 0, 90), 10)
+	_commit(root, body, "hostile")
+	_commit(root, glass, "glass")
+	_commit(root, metal, "metal")
 	var rotor := Node3D.new()
 	rotor.name = "rotor"
-	rotor.position = Vector3(0, 0.55, -0.3)
+	rotor.position = Vector3(0, 0.72, -0.15)
 	root.add_child(rotor)
-	_box(rotor, Vector3(4.6, 0.05, 0.18), Vector3.ZERO, Color("222420"))
-	_box(rotor, Vector3(0.18, 0.05, 4.6), Vector3.ZERO, Color("222420"))
-	var muzzle := Marker3D.new()
-	muzzle.name = "muzzle"
-	muzzle.position = Vector3(0, -0.2, -1.5)
-	root.add_child(muzzle)
+	var blades := _surf()
+	_hard.add_bevel_box(blades, Vector3.ZERO, Vector3(7.6, 0.04, 0.28), 0.015)
+	_hard.add_bevel_box(blades, Vector3.ZERO, Vector3(0.28, 0.04, 7.6), 0.015)
+	_hard.add_cylinder(blades, 0.12, 0.08, Vector3.ZERO, Vector3.ZERO, 12)
+	_commit(rotor, blades, "dark")
+	var tail := Node3D.new()
+	tail.name = "tail_rotor"
+	tail.position = Vector3(0.08, 0.35, 2.35)
+	root.add_child(tail)
+	var tmesh := _surf()
+	_hard.add_bevel_box(tmesh, Vector3.ZERO, Vector3(0.04, 1.35, 0.12), 0.01)
+	_hard.add_bevel_box(tmesh, Vector3.ZERO, Vector3(0.04, 0.12, 1.35), 0.01)
+	_commit(tail, tmesh, "dark")
+	_muzzle(root, Vector3(0, -0.05, -1.7))
 
 
-func _turret(parent: Node3D, pos: Vector3, length: float, radius: float, color: Color, pitch: float) -> Node3D:
+func _gun_turret(root: Node3D, pos: Vector3, length: float, radius: float, paint: String) -> void:
 	var turret := Node3D.new()
 	turret.name = "turret"
 	turret.position = pos
-	parent.add_child(turret)
-	var barrel := MeshInstance3D.new()
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = radius
-	cyl.bottom_radius = radius
-	cyl.height = length
-	cyl.radial_segments = 8
-	barrel.mesh = cyl
-	barrel.rotation_degrees = Vector3(-90, 0, 0)
-	barrel.position = Vector3(0, 0.08, -length * 0.5)
-	barrel.material_override = mat(color, 0.55)
-	turret.add_child(barrel)
-	if absf(pitch) > 0.1:
-		barrel.rotation_degrees = Vector3(-90 + pitch, 0, 0)
-		barrel.position = Vector3(0, 0.15 + sin(deg_to_rad(-pitch)) * length * 0.25, -length * 0.45)
+	root.add_child(turret)
+	var body := _surf()
+	var gun := _surf()
+	_hard.add_lathe(body, PackedVector2Array([
+		Vector2(0.12, 0.22),
+		Vector2(0.38, 0.12),
+		Vector2(0.42, 0.0),
+		Vector2(0.28, -0.08),
+	]), Vector3.ZERO, Vector3.ZERO, 14)
+	_hard.add_bevel_box(body, Vector3(0, 0.18, -0.05), Vector3(0.55, 0.22, 0.16), 0.03)
+	_hard.add_cylinder(gun, radius, length, Vector3(0, 0.2, -length * 0.45), Vector3(90, 0, 0), 14)
+	_hard.add_cylinder(gun, radius * 1.6, 0.1, Vector3(0, 0.2, -length * 0.92), Vector3(90, 0, 0), 12)
+	_commit(turret, body, paint)
+	_commit(turret, gun, "metal")
+	_muzzle(turret, Vector3(0, 0.2, -length * 0.98))
+
+
+func _repair_kit(root: Node3D) -> void:
+	var mark := _surf()
+	_hard.add_bevel_box(mark, Vector3(-0.55, 1.55, 0.15), Vector3(0.62, 0.12, 0.08), 0.02)
+	_hard.add_bevel_box(mark, Vector3(-0.55, 1.55, 0.15), Vector3(0.12, 0.62, 0.08), 0.02)
+	_commit(root, mark, "white")
+	var lamp := _surf()
+	_hard.add_cylinder(lamp, 0.08, 0.12, Vector3(0, 2.15, 0.1), Vector3.ZERO, 10)
+	_commit(root, lamp, "lamp")
+
+
+func _person(enemy: bool, rpg: bool) -> Node3D:
+	var root := Node3D.new()
+	root.name = "soldier"
+	var holder := Node3D.new()
+	holder.rotation_degrees = Vector3(0, 180, 0)
+	holder.scale = Vector3.ONE * 2.2
+	var inst := _instantiate("res://assets/cc0/characters/character-male-c.glb" if not rpg else "res://assets/cc0/characters/character-male-e.glb")
+	holder.add_child(inst)
+	root.add_child(holder)
+	_pose_arms(inst)
+	_tint_soldier(inst, enemy)
+	var gun := Node3D.new()
+	gun.position = Vector3(0.16, 0.46, 0.28)
+	holder.add_child(gun)
+	var mesh := _surf()
+	if rpg:
+		_hard.add_cylinder(mesh, 0.045, 0.62, Vector3(0, 0.02, 0.22), Vector3(78, 8, 0), 12)
+		_hard.add_taper(mesh, 0.07, 0.045, 0.12, Vector3(0, 0.08, 0.5), Vector3(78, 8, 0), 12)
+	else:
+		_hard.add_bevel_box(mesh, Vector3(0.0, 0.02, 0.16), Vector3(0.045, 0.07, 0.38), 0.012)
+		_hard.add_cylinder(mesh, 0.012, 0.28, Vector3(0.0, 0.035, 0.42), Vector3(90, 0, 0), 8)
+		_hard.add_bevel_box(mesh, Vector3(0.0, -0.02, 0.08), Vector3(0.03, 0.09, 0.08), 0.008)
+	_commit(gun, mesh, "dark")
+	var helm := _surf()
+	_hard.add_lathe(helm, PackedVector2Array([
+		Vector2(0.01, 0.1),
+		Vector2(0.16, 0.06),
+		Vector2(0.18, -0.02),
+		Vector2(0.14, -0.06),
+	]), Vector3(0, 0.72, 0.02), Vector3.ZERO, 14)
+	_commit(holder, helm, "hostile" if enemy else scheme)
+	if not rpg:
+		_muzzle(root, Vector3(0.35, 1.15, -1.15))
+	return root
+
+
+func _pose_arms(inst: Node) -> void:
+	var skel := inst.find_child("Skeleton3D", true, false) as Skeleton3D
+	if skel == null:
+		return
+	_bend_arm(skel, "arm-right", Vector3(-70, 30, -15))
+	_bend_arm(skel, "arm-left", Vector3(-55, -18, 22))
+
+
+func _bend_arm(skel: Skeleton3D, bone_name: String, euler_deg: Vector3) -> void:
+	var idx := skel.find_bone(bone_name)
+	if idx < 0:
+		return
+	var rest := skel.get_bone_rest(idx)
+	var bend := Basis.from_euler(Vector3(deg_to_rad(euler_deg.x), deg_to_rad(euler_deg.y), deg_to_rad(euler_deg.z)))
+	skel.set_bone_pose(idx, rest * Transform3D(bend, Vector3.ZERO))
+
+
+func _flag(root: Node3D, pos: Vector3) -> void:
+	var flag := MeshInstance3D.new()
+	flag.name = "beacon"
+	var box := BoxMesh.new()
+	box.size = Vector3(0.55, 0.32, 0.03)
+	flag.mesh = box
+	flag.position = pos
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color("e2b84a")
+	m.roughness = 0.6
+	flag.material_override = m
+	root.add_child(flag)
+
+
+func _glb_wheel(parent: Node3D, pos: Vector3, scale: float) -> void:
+	var pivot := Node3D.new()
+	pivot.name = "wheel%d" % _wheel_i
+	_wheel_i += 1
+	pivot.position = pos
+	var inst := _instantiate("res://assets/cc0/vehicles/wheel-truck.glb")
+	inst.name = "tire"
+	inst.scale = Vector3.ONE * scale
+	pivot.add_child(inst)
+	parent.add_child(pivot)
+
+
+func _road_wheel(parent: Node3D, pos: Vector3) -> void:
+	var pivot := Node3D.new()
+	pivot.name = "wheel%d" % _wheel_i
+	_wheel_i += 1
+	pivot.position = pos
+	var st := _surf()
+	_hard.add_torus(st, 0.28, 0.09, Vector3.ZERO, Vector3(0, 0, 90), 18, 8)
+	_hard.add_cylinder(st, 0.12, 0.16, Vector3.ZERO, Vector3(0, 0, 90), 12)
+	_commit(pivot, st, "rubber")
+	var hub := _surf()
+	_hard.add_cylinder(hub, 0.07, 0.18, Vector3.ZERO, Vector3(0, 0, 90), 10)
+	_commit(pivot, hub, "metal")
+	parent.add_child(pivot)
+
+
+func _muzzle(parent: Node3D, pos: Vector3) -> void:
+	if parent.get_node_or_null("muzzle"):
+		return
 	var muzzle := Marker3D.new()
 	muzzle.name = "muzzle"
-	muzzle.position = barrel.position + Vector3(0, sin(deg_to_rad(-pitch)) * length * 0.5, -cos(deg_to_rad(-pitch)) * length * 0.5)
-	turret.add_child(muzzle)
-	return turret
+	muzzle.position = pos
+	parent.add_child(muzzle)
 
 
-func _wheels(parent: Node3D, spots: Array, radius: float) -> void:
-	for i in spots.size():
-		var pivot := Node3D.new()
-		pivot.name = "wheel%d" % i
-		pivot.position = spots[i]
-		parent.add_child(pivot)
-		var mi := MeshInstance3D.new()
-		var cyl := CylinderMesh.new()
-		cyl.top_radius = radius
-		cyl.bottom_radius = radius
-		cyl.height = 0.26
-		cyl.radial_segments = 8
-		mi.mesh = cyl
-		mi.rotation_degrees = Vector3(0, 0, 90)
-		mi.material_override = mat(RUBBER, 1.0)
-		pivot.add_child(mi)
-		var hub := MeshInstance3D.new()
-		var h := CylinderMesh.new()
-		h.top_radius = radius * 0.4
-		h.bottom_radius = radius * 0.4
-		h.height = 0.28
-		h.radial_segments = 6
-		hub.mesh = h
-		hub.rotation_degrees = Vector3(0, 0, 90)
-		hub.material_override = mat(METAL, 0.45)
-		pivot.add_child(hub)
+func _dust(parent: Node3D, back: float) -> void:
+	var dust := CPUParticles3D.new()
+	dust.name = "dust"
+	dust.position = Vector3(0, 0.25, back)
+	dust.amount = 14
+	dust.lifetime = 0.85
+	dust.explosiveness = 0.05
+	dust.randomness = 0.45
+	dust.emitting = false
+	dust.local_coords = false
+	dust.direction = Vector3(0.4, 0.45, 1)
+	dust.spread = 24.0
+	dust.initial_velocity_min = 0.4
+	dust.initial_velocity_max = 1.6
+	dust.angular_velocity_min = -30
+	dust.angular_velocity_max = 30
+	dust.gravity = Vector3(0.6, 0.2, 0.2)
+	dust.scale_amount_min = 0.7
+	dust.scale_amount_max = 1.8
+	dust.mesh = _puff(Color(0.78, 0.68, 0.5, 0.35), false)
+	parent.add_child(dust)
 
 
-func _blob(parent: Node3D) -> void:
+func _wash(parent: Node3D) -> void:
+	var wash := CPUParticles3D.new()
+	wash.name = "wash"
+	wash.position = Vector3(0, -14.4, 0)
+	wash.amount = 22
+	wash.lifetime = 0.9
+	wash.emitting = false
+	wash.local_coords = false
+	wash.direction = Vector3(0, 0.2, 0)
+	wash.spread = 85.0
+	wash.initial_velocity_min = 1.5
+	wash.initial_velocity_max = 4.0
+	wash.gravity = Vector3(0.4, -0.2, 0.1)
+	wash.scale_amount_min = 1.2
+	wash.scale_amount_max = 2.8
+	wash.mesh = _puff(Color(0.8, 0.72, 0.55, 0.28), false)
+	parent.add_child(wash)
+
+
+func _blob(parent: Node3D, radius: float) -> void:
 	var mi := MeshInstance3D.new()
 	mi.name = "blob"
 	var cyl := CylinderMesh.new()
-	cyl.top_radius = 1.5
-	cyl.bottom_radius = 1.5
-	cyl.height = 0.04
-	cyl.radial_segments = 10
+	cyl.top_radius = radius
+	cyl.bottom_radius = radius
+	cyl.height = 0.025
+	cyl.radial_segments = 16
 	mi.mesh = cyl
-	mi.position = Vector3(0, 0.05, 0)
+	mi.position = Vector3(0, 0.03, 0)
 	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0, 0, 0, 0.28)
+	m.albedo_color = Color(0, 0, 0, 0.18)
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	m.roughness = 1.0
 	mi.material_override = m
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)
 
 
-func _box(parent: Node3D, size: Vector3, pos: Vector3, color: Color) -> MeshInstance3D:
+func _instantiate(path: String) -> Node3D:
+	if not _packed.has(path):
+		_packed[path] = load(path)
+	var packed: PackedScene = _packed[path]
+	return packed.instantiate() as Node3D
+
+
+func _tint_tree(node: Node, paint: String, _enemy: bool) -> void:
+	var tint: Color = _palette(paint)["a"]
+	tint = Color(tint.r * 1.15, tint.g * 1.15, tint.b * 1.05)
+	for mi in node.find_children("*", "MeshInstance3D", true, false):
+		if mi is MeshInstance3D:
+			_tint_mesh(mi, tint)
+
+
+func _tint_soldier(node: Node, enemy: bool) -> void:
+	var cloth: Color = Color("6a4038") if enemy else Color("4e5c32")
+	for mi in node.find_children("*", "MeshInstance3D", true, false):
+		if not (mi is MeshInstance3D):
+			continue
+		var tint: Color = cloth
+		if str(mi.name).find("head") >= 0:
+			tint = Color("c9aa8a")
+		_tint_mesh(mi, tint)
+
+
+func _tint_mesh(mi: MeshInstance3D, tint: Color) -> void:
+	var base := mi.get_active_material(0)
+	var dup: Material = base.duplicate() if base else StandardMaterial3D.new()
+	if dup is StandardMaterial3D:
+		(dup as StandardMaterial3D).albedo_color = tint
+	mi.set_surface_override_material(0, dup)
+
+
+func _palette(which: String) -> Dictionary:
+	if which == "hostile":
+		return {"a": Color("6e342c"), "b": Color("3a1c18"), "c": Color("8a5a32")}
+	if Defs.CAMOS.has(which):
+		return Defs.CAMOS[which]
+	return Defs.CAMOS["woodland"]
+
+
+func _surf() -> SurfaceTool:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	return st
+
+
+func _commit(node: Node3D, st: SurfaceTool, key: String) -> void:
 	var mi := MeshInstance3D.new()
-	var key := "%s" % size
-	if not _boxes.has(key):
-		var mesh := BoxMesh.new()
-		mesh.size = size
-		_boxes[key] = mesh
-	mi.mesh = _boxes[key]
-	mi.position = pos
-	mi.material_override = mat(color)
-	parent.add_child(mi)
-	return mi
+	mi.name = "part_%s" % key
+	mi.mesh = st.commit()
+	mi.material_override = _mat(key)
+	if key == "glass" or key == "lamp":
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	node.add_child(mi)
+
+
+func _mat(key: String) -> Material:
+	if _mats.has(key + scheme):
+		return _mats[key + scheme]
+	var m := StandardMaterial3D.new()
+	if key == "glass":
+		m.albedo_color = Color(0.65, 0.78, 0.85, 0.45)
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.roughness = 0.06
+		m.metallic = 0.2
+	elif key == "lamp":
+		m.albedo_color = Color("fff1c2")
+		m.emission_enabled = true
+		m.emission = Color("fff1c2")
+		m.emission_energy_multiplier = 2.2
+	elif key == "white":
+		m.albedo_color = Color("f4f7f4")
+		m.roughness = 0.45
+	elif key == "rubber" or key == "dark":
+		m.albedo_color = Color("1a1c1a") if key == "dark" else Color("22241f")
+		m.roughness = 0.95
+		m.metallic = 0.05
+	elif key == "metal":
+		m.albedo_color = Color("8d9490")
+		m.metallic = 0.72
+		m.roughness = 0.38
+	else:
+		var pal := _palette(key if key == "hostile" else scheme)
+		m.albedo_texture = _camo_texture(pal)
+		m.albedo_color = Color.WHITE
+		m.uv1_triplanar = true
+		m.uv1_world_triplanar = true
+		m.uv1_scale = Vector3(0.42, 0.42, 0.42)
+		m.roughness = 0.74
+		m.metallic = 0.08
+	_mats[key + scheme] = m
+	return m
+
+
+func _camo_texture(pal: Dictionary) -> ImageTexture:
+	var id := "%s|%s|%s" % [pal["a"], pal["b"], pal["c"]]
+	if _tex.has(id):
+		return _tex[id]
+	var img := Image.create(128, 128, false, Image.FORMAT_RGB8)
+	img.fill(pal["a"])
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(pal["a"].r * 10000.0) ^ int(pal["b"].g * 8000.0)
+	for n in 36:
+		var cx := rng.randi_range(0, 127)
+		var cy := rng.randi_range(0, 127)
+		var rad := rng.randi_range(9, 24)
+		var col: Color = pal["b"] if n % 2 == 0 else pal["c"]
+		var y0 := maxi(0, cy - rad)
+		var y1 := mini(128, cy + rad)
+		var x0 := maxi(0, cx - rad)
+		var x1 := mini(128, cx + rad)
+		for y in range(y0, y1):
+			for x in range(x0, x1):
+				var dx := x - cx
+				var dy := y - cy
+				if dx * dx + dy * dy <= rad * rad:
+					img.set_pixel(x, y, col)
+	var tex := ImageTexture.create_from_image(img)
+	_tex[id] = tex
+	return tex
+
+
+func _puff(color: Color, lit: bool) -> QuadMesh:
+	var quad := QuadMesh.new()
+	quad.size = Vector2(1.1, 1.1)
+	var m := StandardMaterial3D.new()
+	m.albedo_color = color
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	m.vertex_color_use_as_albedo = true
+	m.proximity_fade_enabled = true
+	m.proximity_fade_distance = 1.1
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL if lit else BaseMaterial3D.SHADING_MODE_UNSHADED
+	quad.material = m
+	return quad

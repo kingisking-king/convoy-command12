@@ -1,7 +1,29 @@
 extends RefCounted
 
 const SPACING := 7.6
-const MAX_SLOTS := 8
+const LANES := 5
+const ROWS := 8
+const LANE_GAP := 3.35
+const CENTER := 2
+const MAX_UNITS := 8
+const MAX_SLOTS := MAX_UNITS
+const YAW_STEP := 45
+
+const ARMOR_COST := [0, 35, 80]
+const WEAPON_COST := [0, 40, 95]
+const SPEED_COST := [0, 25, 55]
+const ARMOR_HP := [1.0, 1.22, 1.48]
+const WEAPON_DMG := [1.0, 1.18, 1.4]
+const SPEED_MUL := [1.0, 1.1, 1.22]
+
+const CAMO_ORDER := ["woodland", "desert", "olive", "winter", "urban"]
+const CAMOS := {
+	"woodland": {"name": "Woodland", "a": Color("4e5c2e"), "b": Color("2a381c"), "c": Color("8d7846")},
+	"desert": {"name": "Desert", "a": Color("c2a56c"), "b": Color("8d6a40"), "c": Color("6e7a46")},
+	"olive": {"name": "Olive", "a": Color("556238"), "b": Color("3a4526"), "c": Color("747e4a")},
+	"winter": {"name": "Winter", "a": Color("d4d8dc"), "b": Color("8d98a2"), "c": Color("5c6b64")},
+	"urban": {"name": "Urban", "a": Color("6c706c"), "b": Color("3a3e3c"), "c": Color("8c8676")},
+}
 
 const UNITS := {
 	"cargo": {
@@ -215,23 +237,181 @@ static func cost(kind: String) -> int:
 	return int(UNITS[kind]["cost"])
 
 
+static func entry_kind(entry) -> String:
+	if typeof(entry) == TYPE_DICTIONARY:
+		return str(entry.get("kind", ""))
+	return str(entry)
+
+
+static func entry_cost(entry) -> int:
+	var kind := entry_kind(entry)
+	if kind == "" or not UNITS.has(kind):
+		return 0
+	var total := int(UNITS[kind]["cost"])
+	if typeof(entry) == TYPE_DICTIONARY:
+		total += ARMOR_COST[clampi(int(entry.get("armor", 0)), 0, 2)]
+		total += WEAPON_COST[clampi(int(entry.get("weapon", 0)), 0, 2)]
+		total += SPEED_COST[clampi(int(entry.get("speed", 0)), 0, 2)]
+	return total
+
+
 static func roster_cost(roster: Array) -> int:
 	var total := 0
-	for kind in roster:
-		if typeof(kind) == TYPE_STRING and kind != "":
-			total += cost(kind)
+	for entry in roster:
+		total += entry_cost(entry)
 	return total
+
+
+static func roster_kinds(roster: Array) -> Array:
+	var out: Array = []
+	for entry in roster:
+		var kind := entry_kind(entry)
+		if kind != "":
+			out.append(kind)
+	return out
 
 
 static func count_kind(roster: Array, kind: String) -> int:
 	var n := 0
-	for k in roster:
-		if k == kind:
+	for entry in roster:
+		if entry_kind(entry) == kind:
 			n += 1
 	return n
 
 
-static func recommended(level_index: int, bank: int) -> Array:
+static func lateral(lane: int) -> float:
+	return float(lane - CENTER) * LANE_GAP
+
+
+static func along(row: int) -> float:
+	return -float(row) * SPACING
+
+
+static func make_unit(kind: String, lane: int, row: int, yaw: int = 0, armor: int = 0, weapon: int = 0, speed: int = 0) -> Dictionary:
+	return {
+		"kind": kind,
+		"lane": clampi(lane, 0, LANES - 1),
+		"row": clampi(row, 0, ROWS - 1),
+		"yaw": posmod(yaw, 360),
+		"armor": clampi(armor, 0, 2),
+		"weapon": clampi(weapon, 0, 2),
+		"speed": clampi(speed, 0, 2),
+	}
+
+
+static func index_at(units: Array, lane: int, row: int) -> int:
+	for i in units.size():
+		if int(units[i]["lane"]) == lane and int(units[i]["row"]) == row:
+			return i
+	return -1
+
+
+static func cargo_is_leading(units: Array) -> bool:
+	var cargo_row := 99
+	var gun_row := 99
+	var guns := 0
+	for entry in units:
+		if typeof(entry) != TYPE_DICTIONARY:
+			continue
+		var kind := entry_kind(entry)
+		if kind == "" or not UNITS.has(kind):
+			continue
+		var row := int(entry["row"])
+		if kind == "cargo":
+			cargo_row = mini(cargo_row, row)
+		elif float(UNITS[kind]["dmg"]) > 0.0:
+			guns += 1
+			gun_row = mini(gun_row, row)
+	if guns == 0:
+		return false
+	return cargo_row < gun_row
+
+
+static func scaled(kind: String, armor: int, weapon: int, speed: int) -> Dictionary:
+	var spec: Dictionary = UNITS[kind]
+	var hp: float = float(spec["hp"]) * ARMOR_HP[clampi(armor, 0, 2)]
+	var dmg: float = float(spec["dmg"])
+	if dmg > 0.0:
+		dmg *= WEAPON_DMG[clampi(weapon, 0, 2)]
+	var spd: float = float(spec["spd"]) * SPEED_MUL[clampi(speed, 0, 2)]
+	return {"hp": hp, "dmg": dmg, "spd": spd}
+
+
+static func arrange(kinds: Array, style: String = "wedge") -> Array:
+	var clean: Array = []
+	for kind in kinds:
+		var k := str(kind)
+		if UNITS.has(k):
+			clean.append(k)
+	if style == "line":
+		var line: Array = []
+		for i in clean.size():
+			line.append(make_unit(clean[i], CENTER, i))
+		return line
+	var guns: Array = []
+	var cargos: Array = []
+	var repairs: Array = []
+	for k in clean:
+		var role := str(UNITS[k]["role"])
+		if role == "cargo":
+			cargos.append(k)
+		elif role == "repair":
+			repairs.append(k)
+		else:
+			guns.append(k)
+	var taken := {}
+	var out: Array = []
+	var gun_spots: Array = [
+		Vector2i(2, 0), Vector2i(1, 2), Vector2i(3, 4),
+		Vector2i(3, 2), Vector2i(1, 4), Vector2i(0, 3), Vector2i(4, 3), Vector2i(2, 1),
+	]
+	var cargo_spots: Array = [Vector2i(2, 2), Vector2i(2, 4), Vector2i(2, 6), Vector2i(1, 6)]
+	var repair_spots: Array = [Vector2i(2, 3), Vector2i(2, 5), Vector2i(1, 3), Vector2i(3, 5)]
+	if style == "box":
+		gun_spots = [
+			Vector2i(1, 1), Vector2i(3, 1), Vector2i(0, 2), Vector2i(4, 2),
+			Vector2i(1, 3), Vector2i(3, 3), Vector2i(2, 0), Vector2i(2, 4),
+		]
+		cargo_spots = [Vector2i(2, 2), Vector2i(2, 3), Vector2i(1, 2), Vector2i(3, 2)]
+		repair_spots = [Vector2i(2, 4), Vector2i(2, 5), Vector2i(1, 4), Vector2i(3, 4)]
+	for i in guns.size():
+		var spot: Vector2i = gun_spots[mini(i, gun_spots.size() - 1)]
+		spot = _free_spot(taken, spot)
+		taken["%d,%d" % [spot.x, spot.y]] = true
+		out.append(make_unit(str(guns[i]), spot.x, spot.y))
+	for i in cargos.size():
+		var cspot: Vector2i = cargo_spots[mini(i, cargo_spots.size() - 1)]
+		cspot = _free_spot(taken, cspot)
+		taken["%d,%d" % [cspot.x, cspot.y]] = true
+		out.append(make_unit(str(cargos[i]), cspot.x, cspot.y))
+	for i in repairs.size():
+		var rspot: Vector2i = repair_spots[mini(i, repair_spots.size() - 1)]
+		rspot = _free_spot(taken, rspot)
+		taken["%d,%d" % [rspot.x, rspot.y]] = true
+		out.append(make_unit(str(repairs[i]), rspot.x, rspot.y))
+	return out
+
+
+static func _free_spot(taken: Dictionary, spot: Vector2i) -> Vector2i:
+	if not taken.has("%d,%d" % [spot.x, spot.y]):
+		return spot
+	for row in ROWS:
+		for lane in LANES:
+			var key := "%d,%d" % [lane, row]
+			if not taken.has(key):
+				return Vector2i(lane, row)
+	return spot
+
+
+static func camo_for_biome(biome: String) -> String:
+	if biome == "desert":
+		return "desert"
+	if biome == "mountain":
+		return "olive"
+	return "woodland"
+
+
+static func _recommended_kinds(level_index: int, bank: int) -> Array:
 	var basic := [
 		["humvee", "apc", "cargo", "repair", "cargo", "humvee"],
 		["tank", "apc", "cargo", "repair", "cargo", "aa", "humvee"],
@@ -262,6 +442,10 @@ static func recommended(level_index: int, bank: int) -> Array:
 		if not removed:
 			break
 	return pick
+
+
+static func recommended(level_index: int, bank: int) -> Array:
+	return arrange(_recommended_kinds(level_index, bank), "wedge")
 
 
 static func payout(level: Dictionary, delivered: int, kills: int, column_cost: int) -> Dictionary:

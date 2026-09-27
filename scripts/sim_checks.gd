@@ -23,7 +23,7 @@ static func run() -> bool:
 		var result: Dictionary = _play(levels[i], roster, int(levels[i]["seed"]) + 100, false)
 		var pay: Dictionary = Defs.payout(levels[i], int(result["delivered"]), int(result["kills"]), Defs.roster_cost(roster))
 		print("L%d %-12s roster=%s cost=%d %s delivered=%d/%d kills=%d cargo_hp=%.0f escorts_lost=%d t=%.1f bank %d -> %d" % [
-			i + 1, levels[i]["name"], str(roster), Defs.roster_cost(roster), result["status"],
+			i + 1, levels[i]["name"], str(Defs.roster_kinds(roster)), Defs.roster_cost(roster), result["status"],
 			result["delivered"], result["cargo_total"], result["kills"], result["cargo_hp"],
 			result["escorts_lost"], result["time"], bank, bank + int(pay["net"]),
 		])
@@ -54,9 +54,45 @@ static func run() -> bool:
 				ok = false
 		bank += int(pay2["net"])
 
+	print("--- grid formation holds lanes and upgrades scale ---")
+	var wedge: Array = Defs.arrange(["humvee", "apc", "cargo"], "wedge")
+	if wedge.size() != 3:
+		print("FAIL wedge size")
+		ok = false
+	var lanes := {}
+	for entry in wedge:
+		lanes[int(entry["lane"])] = true
+	if lanes.size() < 2:
+		print("FAIL wedge did not use multiple lanes")
+		ok = false
+	var probe_level: Dictionary = levels[0]
+	var probe_route = RouteScript.new(probe_level)
+	var probe = SimScript.new()
+	probe.start(probe_level, wedge, probe_route, 5)
+	probe.tick(0.5)
+	var lat0 := float(probe.friendlies[0]["lateral"])
+	var lat1 := float(probe.friendlies[1]["lateral"])
+	if absf(lat0 - lat1) < 2.0:
+		print("FAIL formation collapsed lanes")
+		ok = false
+	var armored: Array = [Defs.make_unit("tank", 2, 1, 90, 2, 1, 1)]
+	var armed = SimScript.new()
+	armed.start(probe_level, armored, probe_route, 6)
+	var base_hp := float(Defs.UNITS["tank"]["hp"])
+	if float(armed.friendlies[0]["max_hp"]) <= base_hp:
+		print("FAIL armor upgrade did not raise hp")
+		ok = false
+	if absf(float(armed.friendlies[0]["yaw"]) - 90.0) > 0.1:
+		print("FAIL yaw was not kept")
+		ok = false
+	if Defs.entry_cost(armored[0]) <= Defs.cost("tank"):
+		print("FAIL upgrade cost")
+		ok = false
+	print("grid lanes=%s armor_hp=%.0f yaw=%.0f" % [str(lanes.keys()), armed.friendlies[0]["max_hp"], armed.friendlies[0]["yaw"]])
+
 	print("--- cargo only should lose ---")
 	for i in levels.size():
-		var lonely: Dictionary = _play(levels[i], ["cargo", "cargo"], int(levels[i]["seed"]) + 100, true)
+		var lonely: Dictionary = _play(levels[i], Defs.arrange(["cargo", "cargo"], "line"), int(levels[i]["seed"]) + 100, true)
 		print("L%d cargo-only %s delivered=%d" % [i + 1, lonely["status"], lonely["delivered"]])
 		if lonely["status"] != "lost":
 			ok = false
