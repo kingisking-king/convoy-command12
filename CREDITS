@@ -3,7 +3,7 @@ Convoy Command art credits
 Kenney Car Kit
 https://kenney.nl/assets/car-kit
 License: CC0 1.0
-Used for cargo trucks, humvees, anti-air trucks, repair vans, technicals, and wheels.
+The vehicle meshes in game are original. The Kenney car kit remains in the repo and is not used on the current units.
 
 Kenney Mini Characters
 https://kenney.nl/assets/mini-characters
@@ -18,7 +18,8 @@ Used for trees, cacti, palms, and rocks.
 Quaternius Animated Tanks
 https://quaternius.com/packs/animatedtanks.html
 License: CC0 1.0
-Used for the tank, APC, and anti-air models.
+The tank pack remains in the repo and is not used on the current units.
 
-Helicopter fuselages, some turrets, weapons, buildings, and camo textures are original meshes made for this project.
-License texts are in assets/cc0/.
+Cargo trucks, MRAPs, APCs, tanks, SPAAG, mortars, fuel tankers, engineers, medevac vans, escort helicopters, and hostile vehicles are original meshes made for this project. They are not copied from Arma 3 or Bohemia Interactive.
+Camo, mud, and metal materials on those meshes are original.
+License texts for the CC0 packs that remain in the tree are in assets/cc0/.

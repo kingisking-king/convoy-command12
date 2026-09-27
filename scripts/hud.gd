@@ -27,6 +27,8 @@ signal preset_save(preset_name: String)
 signal preset_load(preset_name: String)
 signal preset_delete(preset_name: String)
 signal sandbox_pressed
+signal missions_pressed
+signal mission_picked(index: int)
 signal sandbox_arm_pressed
 signal sandbox_god_toggled(on: bool)
 signal sandbox_speed_changed(speed: float)
@@ -102,6 +104,8 @@ var drive_speed: HSlider
 var drive_diff_label: Label
 var drive_speed_label: Label
 var spawn_pick: OptionButton
+var mission_box: PanelContainer
+var mission_list: VBoxContainer
 var sandbox_sync := false
 
 func setup(p_audio) -> void:
@@ -114,6 +118,7 @@ func setup(p_audio) -> void:
 	add_child(root)
 	_build_menu()
 	_build_sandbox()
+	_build_missions()
 	_build_help()
 	_build_brief()
 	_build_build()
@@ -178,7 +183,7 @@ func typing() -> bool:
 
 
 func hide_all() -> void:
-	for panel in [menu_box, sandbox_box, sandbox_drive, help_box, brief_box, build_top, build_dock, build_bottom, drive_top, drive_bottom, pause_box, result_box]:
+	for panel in [menu_box, sandbox_box, sandbox_drive, help_box, brief_box, build_top, build_dock, build_bottom, drive_top, drive_bottom, pause_box, result_box, mission_box]:
 		panel.visible = false
 	map.visible = false
 
@@ -199,9 +204,48 @@ func show_menu(bank: int, level_index: int, level_count: int, campaign_done: boo
 	else:
 		menu_sub.text = "Build the column. Drive the route. Deliver the cargo."
 		_menu_button("Campaign", play_pressed)
+	_menu_button("Missions", missions_pressed)
 	_menu_button("Sandbox", sandbox_pressed)
 	_menu_button("How to Play", help_pressed)
 	_menu_button("Quit", quit_pressed)
+
+
+func _build_missions() -> void:
+	mission_box = PanelContainer.new()
+	mission_box.set_anchors_preset(Control.PRESET_CENTER)
+	mission_box.offset_left = -360
+	mission_box.offset_right = 360
+	mission_box.offset_top = -280
+	mission_box.offset_bottom = 280
+	mission_box.add_theme_stylebox_override("panel", _style(Color(0.07, 0.08, 0.06, 0.94), Color(0.55, 0.48, 0.28), 10))
+	root.add_child(mission_box)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	mission_box.add_child(box)
+	var title := Label.new()
+	title.text = "MISSIONS"
+	title.add_theme_font_size_override("font_size", 28)
+	box.add_child(title)
+	mission_list = VBoxContainer.new()
+	mission_list.add_theme_constant_override("separation", 6)
+	box.add_child(mission_list)
+	box.add_child(_button("Back", back_pressed))
+	mission_box.visible = false
+
+
+func show_missions(progress: int, cleared: bool) -> void:
+	hide_all()
+	mission_box.visible = true
+	for c in mission_list.get_children():
+		c.queue_free()
+	var levels := Defs.levels()
+	for i in levels.size():
+		var btn := Button.new()
+		var open := cleared or i <= progress
+		btn.text = "%d  %s  —  %s" % [i + 1, levels[i]["name"], "open" if open else "locked"]
+		btn.disabled = not open
+		btn.pressed.connect(mission_picked.emit.bind(i))
+		mission_list.add_child(btn)
 
 
 func show_help() -> void:
@@ -235,10 +279,10 @@ func show_build(level: Dictionary, bank: int, units: Array, kind: String, p_rout
 	var unlimited := bool(state.get("unlimited", false))
 	if unlimited:
 		build_budget.text = "Budget  unlimited"
-		build_column.text = "Formation  $%d    vehicles  %d/%d    cargo  %d" % [cost, units.size(), Defs.MAX_UNITS, cargo]
+		build_column.text = "Formation  $%d    vehicles  %d    cargo  %d" % [cost, units.size(), cargo]
 	else:
 		build_budget.text = "Budget  $%d" % bank
-		build_column.text = "Formation  $%d    left  $%d    vehicles  %d/%d    cargo  %d" % [cost, bank - cost, units.size(), Defs.MAX_UNITS, cargo]
+		build_column.text = "Formation  $%d    left  $%d    vehicles  %d    cargo  %d" % [cost, bank - cost, units.size(), cargo]
 	var warn := ""
 	if cargo == 0:
 		warn = "Place at least one cargo truck."
@@ -507,14 +551,16 @@ func _build_sandbox() -> void:
 	body.add_theme_constant_override("separation", 8)
 	scroll.add_child(body)
 	body.add_child(_sandbox_heading("Map"))
-	var maps := HBoxContainer.new()
-	maps.add_theme_constant_override("separation", 8)
+	var maps := GridContainer.new()
+	maps.columns = 3
+	maps.add_theme_constant_override("h_separation", 8)
+	maps.add_theme_constant_override("v_separation", 6)
 	body.add_child(maps)
-	var map_names := ["Dust Road", "Pine Cut", "High Pass"]
+	var map_names: Array = Defs.levels()
 	for i in map_names.size():
 		var map_btn := Button.new()
-		map_btn.text = map_names[i]
-		map_btn.custom_minimum_size = Vector2(150, 36)
+		map_btn.text = str(map_names[i]["name"])
+		map_btn.custom_minimum_size = Vector2(180, 34)
 		map_btn.pressed.connect(_mark_sandbox_map.bind(i))
 		maps.add_child(map_btn)
 		sandbox_map_buttons.append(map_btn)
@@ -738,7 +784,7 @@ func _build_help() -> void:
 	box.add_child(title)
 	help_body = Label.new()
 	help_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	help_body.text = "Arm a formation, then ride it to the drop.\n\nBuild\n1–6 pick a unit. Left click an empty grid cell to place it. Left click a vehicle to select it, then drag it to another cell. Right click removes it. R rotates the selected vehicle. Q fills a suggested wedge. Enter deploys.\nThe grid is five lanes by eight rows. The formation keeps that shape on the road.\nName the convoy, pick a camo, and upgrade armor, weapon, or speed on the selected vehicle. Save a preset and load it later.\nYou need at least one cargo truck. Flank the cargo or put guns ahead of it. Anti-air is for helicopters. The repair truck heals whoever is hurting, cargo first.\n\nDrive\nGuns fire on their own. Right-drag orbits the camera, the wheel zooms, F snaps back. A/D orbit, W/S zoom.\nQ smoke — thick cover, hostiles miss more.\nE airstrike — a jet, then a blast on the densest group. It does not hit your trucks.\nR field repair — a burst of healing.\nEsc pauses.\n\nDeliver at least one cargo truck. Lose if they all die. Pay rolls into the next mission's budget.\n\nSandbox, from the main menu, gives an unlimited budget on any map. Choose the attackers, a difficulty, god mode, and the game speed. Left click spawns a hostile. Restart Drive runs the same column again. Sandbox does not change the campaign."
+	help_body.text = "Arm a formation, then ride it to the drop.\n\nBuild\n1-9, 0, minus and equals pick a unit. Left click anywhere in the yard to place it. Drag a vehicle to move it. Right click removes it. R rotates. Q fills a suggested wedge. Enter deploys.\nThere is no lane cap. Wide lines and clusters keep their spacing while they drive.\nFuel stretches smoke and returns a charge. Engineers clear IEDs. Mortars splash. The escort helicopter flies with the column. Medevac heals. Bring at least one cargo truck.\n\nDrive\nGuns fire on their own. Right-drag orbits the camera, the wheel zooms, F snaps back. A/D orbit, W/S zoom.\nQ smoke — thick cover, hostiles miss more.\nE airstrike — a jet, then a blast on the densest group. It does not hit your trucks.\nR field repair — a burst of healing.\nEsc pauses.\n\nDeliver at least one cargo truck. Lose if they all die. Pay rolls into the next mission's budget.\n\nSandbox, from the main menu, gives an unlimited budget on any map. Choose the attackers, a difficulty, god mode, and the game speed. Left click spawns a hostile. Restart Drive runs the same column again. Sandbox does not change the campaign."
 	box.add_child(help_body)
 	box.add_child(_button("Back", back_pressed))
 
@@ -802,13 +848,18 @@ func _build_build() -> void:
 	build_bottom.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	build_bottom.offset_left = 12
 	build_bottom.offset_right = -12
-	build_bottom.offset_top = -168
+	build_bottom.offset_top = -188
 	build_bottom.offset_bottom = -12
 	build_bottom.add_theme_stylebox_override("panel", _style(Color(0.07, 0.08, 0.06, 0.9), Color(0.45, 0.4, 0.24), 8))
 	root.add_child(build_bottom)
+	var row_scroll := ScrollContainer.new()
+	row_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	row_scroll.custom_minimum_size = Vector2(900, 120)
+	build_bottom.add_child(row_scroll)
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	build_bottom.add_child(row)
+	row.add_theme_constant_override("separation", 6)
+	row_scroll.add_child(row)
 	for i in Defs.CARD_ORDER.size():
 		var kind: String = Defs.CARD_ORDER[i]
 		var spec: Dictionary = Defs.UNITS[kind]
@@ -816,7 +867,7 @@ func _build_build() -> void:
 		btn.text = "%d  %s\n$%d   HP %d   DMG %d\nRNG %d   SPD %d" % [
 			i + 1, spec["name"], spec["cost"], spec["hp"], int(spec["dmg"]), int(spec["rng"]), int(spec["spd"]),
 		]
-		btn.custom_minimum_size = Vector2(150, 92)
+		btn.custom_minimum_size = Vector2(128, 100)
 		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		btn.pressed.connect(_on_card.bind(kind))
 		row.add_child(btn)

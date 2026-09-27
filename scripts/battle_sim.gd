@@ -24,6 +24,9 @@ var rng := RandomNumberGenerator.new()
 var sandbox := false
 var god_mode := false
 var threat := 1.0
+var ieds: Array = []
+var fuel_clock := 0.0
+var charge_cap := {"smoke": 0, "airstrike": 0, "repair": 0}
 
 func start(p_level: Dictionary, roster: Array, p_route, combat_seed: int) -> void:
 	level = p_level
@@ -52,13 +55,32 @@ func start(p_level: Dictionary, roster: Array, p_route, combat_seed: int) -> voi
 		"repair": int(src["repair"]),
 	}
 	smoke_timer = 0.0
+	fuel_clock = 0.0
+	ieds.clear()
+	charge_cap = {
+		"smoke": int(src["smoke"]),
+		"airstrike": int(src["airstrike"]),
+		"repair": int(src["repair"]),
+	}
+	for spec in level.get("ieds", []):
+		if typeof(spec) != TYPE_DICTIONARY:
+			continue
+		var mine_at := float(spec.get("at", 0.0))
+		var sm_m: Dictionary = route.sample(mine_at)
+		var mine_pos: Vector3 = sm_m["pos"] + sm_m["right"] * float(spec.get("lat", 0.0))
+		ieds.append({
+			"pos": mine_pos,
+			"live": true,
+			"warn": false,
+			"fuse": 1.15,
+		})
 	for i in roster.size():
 		var entry = roster[i]
 		if typeof(entry) == TYPE_DICTIONARY:
 			_add_friendly(
 				str(entry["kind"]),
-				Defs.along(int(entry.get("row", i))),
-				Defs.lateral(int(entry.get("lane", Defs.CENTER))),
+				Defs.unit_along(entry),
+				Defs.unit_lateral(entry),
 				float(entry.get("yaw", 0.0)),
 				int(entry.get("armor", 0)),
 				int(entry.get("weapon", 0)),
@@ -81,6 +103,8 @@ func tick(dt: float) -> void:
 	_separate_enemies()
 	_acquire_targets()
 	_passive_repairs(dt)
+	_tick_fuel(dt)
+	_tick_ieds(dt)
 	_friendly_fire(dt)
 	_enemy_fire(dt)
 	_resolve_strikes()
@@ -95,7 +119,10 @@ func try_ability(ability: String) -> bool:
 		return false
 	if ability == "smoke":
 		charges["smoke"] = int(charges["smoke"]) - 1
-		smoke_timer = 7.5
+		var dur := 7.5
+		if _living_role("fuel"):
+			dur *= 1.5
+		smoke_timer = dur
 		events.append({"type": "ability", "name": "smoke"})
 		return true
 	if ability == "repair":
@@ -213,6 +240,8 @@ func _add_friendly(kind: String, along: float, lateral: float = 0.0, yaw: float 
 		"armor": armor,
 		"weapon": weapon,
 		"speed_lv": speed_lv,
+		"air": bool(spec.get("air", false)),
+		"alt": float(spec.get("alt", 0.0)),
 		"pos": Vector3.ZERO,
 		"dir": Vector3(0, 0, 1),
 		"cooldown": 0.0,
@@ -220,7 +249,6 @@ func _add_friendly(kind: String, along: float, lateral: float = 0.0, yaw: float 
 		"delivered": false,
 		"credited": false,
 		"target_id": -1,
-		"air": false,
 		"moving": true,
 	}
 	next_id += 1
@@ -233,11 +261,82 @@ func _add_friendly(kind: String, along: float, lateral: float = 0.0, yaw: float 
 func _place_friendly(u) -> void:
 	var sm: Dictionary = route.sample(float(u["s"]))
 	u["pos"] = sm["pos"] + sm["right"] * float(u.get("lateral", 0.0))
+	if bool(u.get("air", false)):
+		u["pos"].y = float(u.get("alt", 12.0))
 	var dir: Vector3 = sm["dir"]
 	var yaw := deg_to_rad(float(u.get("yaw", 0.0)))
 	if absf(yaw) > 0.001:
 		dir = Basis(Vector3.UP, yaw) * dir
 	u["dir"] = dir
+
+
+func _living_role(role: String) -> bool:
+	for u in friendlies:
+		if u["alive"] and not u["delivered"] and str(u["role"]) == role:
+			return true
+	return false
+
+
+func _tick_fuel(dt: float) -> void:
+	if not _living_role("fuel"):
+		return
+	fuel_clock += dt
+	if fuel_clock < 22.0:
+		return
+	fuel_clock = 0.0
+	var best := ""
+	var best_n := 99
+	for key in ["smoke", "repair", "airstrike"]:
+		var n := int(charges.get(key, 0))
+		var cap := int(charge_cap.get(key, 0))
+		if n < cap and n < best_n:
+			best_n = n
+			best = key
+	if best == "":
+		return
+	charges[best] = int(charges[best]) + 1
+	events.append({"type": "ability", "name": "fuel"})
+
+
+func _tick_ieds(dt: float) -> void:
+	for mine in ieds:
+		if not bool(mine["live"]):
+			continue
+		var pos: Vector3 = mine["pos"]
+		var found := false
+		var eng_d := 28.0
+		for u in friendlies:
+			if not u["alive"] or u["delivered"] or str(u["role"]) != "engineer":
+				continue
+			var d := Vector2(u["pos"].x, u["pos"].z).distance_to(Vector2(pos.x, pos.z))
+			if d < eng_d:
+				eng_d = d
+				found = true
+		if found:
+			mine["warn"] = true
+			mine["fuse"] = float(mine["fuse"]) - dt
+			if float(mine["fuse"]) <= 0.0:
+				mine["live"] = false
+				events.append({"type": "ied", "action": "clear", "pos": pos})
+			continue
+		for u in friendlies:
+			if not u["alive"] or u["delivered"] or bool(u.get("air", false)):
+				continue
+			if Vector2(u["pos"].x, u["pos"].z).distance_to(Vector2(pos.x, pos.z)) > 3.3:
+				continue
+			mine["live"] = false
+			events.append({"type": "ied", "action": "boom", "pos": pos})
+			for v in friendlies:
+				if not v["alive"] or v["delivered"] or bool(v.get("air", false)):
+					continue
+				var blast := Vector2(v["pos"].x, v["pos"].z).distance_to(Vector2(pos.x, pos.z))
+				if blast > 7.0 or god_mode:
+					continue
+				v["hp"] = float(v["hp"]) - 46.0 * (1.0 - blast / 7.0)
+				if float(v["hp"]) <= 0.0:
+					v["hp"] = 0.0
+					v["alive"] = false
+			break
 
 
 func _move_friendlies(dt: float) -> void:
@@ -406,7 +505,9 @@ func _acquire_targets() -> void:
 
 func _passive_repairs(dt: float) -> void:
 	for u in friendlies:
-		if not u["alive"] or u["delivered"] or u["role"] != "repair":
+		if not u["alive"] or u["delivered"]:
+			continue
+		if u["role"] != "repair" and u["role"] != "medic":
 			continue
 		var best = null
 		var best_score := 0.0
@@ -448,8 +549,22 @@ func _friendly_fire(dt: float) -> void:
 			profile = "aa"
 		elif u["role"] == "medium":
 			profile = "medium"
+		if u["role"] == "artillery":
+			profile = "heavy"
 		var lift := 0.2 if bool(tgt["air"]) else 1.0
-		_fire(u, tgt, u["pos"] + Vector3(0, 1.35, 0), dst + Vector3(0, lift, 0), float(u["dmg"]) * mult, profile, "friendly", 0.84)
+		var origin_y := float(u.get("alt", 0.0)) + 1.2 if bool(u.get("air", false)) else 1.35
+		_fire(u, tgt, u["pos"] + Vector3(0, origin_y, 0), dst + Vector3(0, lift, 0), float(u["dmg"]) * mult, profile, "friendly", 0.84)
+		if u["role"] == "artillery":
+			for other in enemies:
+				if other == tgt or not other["alive"]:
+					continue
+				var splash := Vector2(other["pos"].x, other["pos"].z).distance_to(Vector2(dst.x, dst.z))
+				if splash > 6.5:
+					continue
+				other["hp"] = float(other["hp"]) - float(u["dmg"]) * 0.38
+				if float(other["hp"]) <= 0.0:
+					other["hp"] = 0.0
+					other["alive"] = false
 
 
 func _enemy_fire(dt: float) -> void:
@@ -602,8 +717,10 @@ func _best_friendly_for(e) -> Variant:
 		var score := -d
 		if u["role"] == "cargo":
 			score += 55.0
-		elif u["role"] == "repair":
+		elif u["role"] == "repair" or u["role"] == "medic" or u["role"] == "fuel":
 			score += 10.0
+		if str(e.get("kind", "")) == "spaa" and bool(u.get("air", false)):
+			score += 80.0
 		if score > best_score:
 			best_score = score
 			best = u
