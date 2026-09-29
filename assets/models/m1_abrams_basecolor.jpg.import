@@ -2,13 +2,10 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://m7tbv2y28bdv"
+uid="uid://drl721iu2fv4j"
 path="res://.godot/imported/m1_abrams_basecolor.jpg-5102cd618aa3c9a7825faf00971ba0c1.ctex"
 metadata={
 "vram_texture": false
-}
-generator_parameters={
-"md5": "84b87cbbd6b84bbde3775692a1907d23"
 }
 
 [deps]
@@ -26,7 +23,7 @@ compress/rdo_quality_loss=0.0
 compress/hdr_compression=1
 compress/normal_map=0
 compress/channel_pack=0
-mipmaps/generate=true
+mipmaps/generate=false
 mipmaps/limit=-1
 roughness/mode=0
 roughness/src_normal=""

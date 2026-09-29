@@ -24,4 +24,4 @@ Cargo trucks, MRAPs, APCs, tanks, SPAAG, mortars, fuel tankers, engineers, medev
 Camo, mud, and metal materials on those meshes are original.
 License texts for the CC0 packs that remain in the tree are in assets/cc0/.
 
-The player M1 Abrams tank (assets/models/m1_abrams.glb) is the owner's own Meshy AI model, decimated to ~56k triangles with 2048/1024 textures and split into hull and turret for the game.
+The player M1 Abrams tank (assets/models/m1_abrams_hull.glb, m1_abrams_turret.glb) is the owner's own Meshy AI model at full resolution (3.28M triangles, original 2048 PBR textures), split into hull and turret for the game.
