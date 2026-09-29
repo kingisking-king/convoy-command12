@@ -23,3 +23,5 @@ The tank pack remains in the repo and is not used on the current units.
 Cargo trucks, MRAPs, APCs, tanks, SPAAG, mortars, fuel tankers, engineers, medevac vans, escort helicopters, and hostile vehicles are original meshes made for this project. They are not copied from Arma 3 or Bohemia Interactive.
 Camo, mud, and metal materials on those meshes are original.
 License texts for the CC0 packs that remain in the tree are in assets/cc0/.
+
+The player M1 Abrams tank (assets/models/m1_abrams.glb) is the owner's own Meshy AI model, decimated to ~56k triangles with 2048/1024 textures and split into hull and turret for the game.

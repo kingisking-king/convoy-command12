@@ -78,7 +78,53 @@ func apc(root: Node3D, paint: String) -> void:
 	_gunner(root, Vector3(0, 1.85, -0.15))
 
 
+const ABRAMS_PATH := "res://assets/models/m1_abrams.glb"
+var _abrams: PackedScene = null
+
+
 func tank(root: Node3D, paint: String) -> void:
+	if paint != "hostile" and _abrams_tank(root):
+		return
+	_procedural_tank(root, paint)
+
+
+# Player tank: the M1 Abrams model. The GLB is pre-baked to game units: meters,
+# ground at y=0, forward on -Z, hull and turret split with the turret node on
+# the turret ring so it yaws/pitches with the existing turret logic.
+func _abrams_tank(root: Node3D) -> bool:
+	if _abrams == null:
+		if not ResourceLoader.exists(ABRAMS_PATH):
+			return false
+		_abrams = load(ABRAMS_PATH) as PackedScene
+		if _abrams == null:
+			return false
+	var src := _abrams.instantiate() as Node3D
+	var hull_src := src.find_child("hull", true, false) as MeshInstance3D
+	var turret_src := src.find_child("turret", true, false) as MeshInstance3D
+	if hull_src == null or turret_src == null:
+		src.free()
+		return false
+	var body := _holder(root)
+	var hull := MeshInstance3D.new()
+	hull.name = "abrams_hull"
+	hull.mesh = hull_src.mesh
+	body.add_child(hull)
+	_nose(body, -3.3)
+	host._conform_forward(body)
+	var turret := Node3D.new()
+	turret.name = "turret"
+	turret.position = turret_src.position
+	root.add_child(turret)
+	var shell := MeshInstance3D.new()
+	shell.name = "abrams_turret"
+	shell.mesh = turret_src.mesh
+	turret.add_child(shell)
+	host._muzzle(turret, Vector3(0, 0.08, -4.0))
+	src.free()
+	return true
+
+
+func _procedural_tank(root: Node3D, paint: String) -> void:
 	var body := _holder(root)
 	_tracked_hull(body, paint, 2.15, 0.85, 6.8, 0.62)
 	_hard_box(body, paint, Vector3(0, 0.95, -2.35), Vector3(2.0, 0.55, 1.5), 0.08)
