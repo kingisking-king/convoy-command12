@@ -4,4 +4,4 @@ https://quaternius.com/packs/animatedtanks.html
 License: CC0 1.0 Universal
 https://creativecommons.org/publicdomain/zero/1.0/
 
-Tank.fbx, Tank2.fbx, and Tank3.fbx are used for the tank, APC, and anti-air units.
+Tank.fbx is the hostile tank. Tank2.fbx is the APC and IFV. Tank3.fbx is the mortar and hostile artillery. Tank4.fbx is the anti-air and hostile SPAAG. The player tank is the separate M1 Abrams model.

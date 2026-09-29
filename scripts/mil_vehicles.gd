@@ -78,7 +78,82 @@ func apc(root: Node3D, paint: String) -> void:
 	_gunner(root, Vector3(0, 1.85, -0.15))
 
 
+const ABRAMS_HULL := "res://assets/models/m1_abrams_hull.glb"
+const ABRAMS_TURRET := "res://assets/models/m1_abrams_turret.glb"
+# Specular strength on the Abrams PBR material. The Meshy roughness map sits
+# around 0.45, which mirrored the blue sky on dark camo patches at the
+# default 0.5 specular; a lower value keeps the tan paint true.
+const ABRAMS_SPECULAR := 0.18
+var _abrams_hull: Mesh = null
+var _abrams_turret: Mesh = null
+var _abrams_pivot := Vector3.ZERO
+
+
 func tank(root: Node3D, paint: String) -> void:
+	if paint != "hostile" and _abrams_tank(root):
+		return
+	_procedural_tank(root, paint)
+
+
+func _abrams_mesh(path: String, node_name: String) -> MeshInstance3D:
+	if not ResourceLoader.exists(path):
+		return null
+	var scene := load(path) as PackedScene
+	if scene == null:
+		return null
+	var src := scene.instantiate() as Node3D
+	var mi := src.find_child(node_name, true, false) as MeshInstance3D
+	if mi == null and src is MeshInstance3D:
+		mi = src as MeshInstance3D
+	if mi == null:
+		src.free()
+		return null
+	var out := MeshInstance3D.new()
+	out.mesh = mi.mesh
+	out.position = mi.position if mi != src else src.position
+	for i in mi.mesh.get_surface_count():
+		var mat := mi.mesh.surface_get_material(i) as BaseMaterial3D
+		if mat != null:
+			mat.metallic_specular = ABRAMS_SPECULAR
+	src.free()
+	return out
+
+
+# Player tank: the owner's full-resolution M1 Abrams. The GLBs are pre-baked to
+# game units: meters, ground at y=0, forward on -Z. Hull and turret are separate
+# files (each under GitHub's 100 MB limit); the turret file's node sits on the
+# turret ring so it yaws/pitches with the existing turret logic.
+func _abrams_tank(root: Node3D) -> bool:
+	if _abrams_hull == null or _abrams_turret == null:
+		var h := _abrams_mesh(ABRAMS_HULL, "hull")
+		var t := _abrams_mesh(ABRAMS_TURRET, "turret")
+		if h == null or t == null:
+			return false
+		_abrams_hull = h.mesh
+		_abrams_turret = t.mesh
+		_abrams_pivot = t.position
+		h.free()
+		t.free()
+	var body := _holder(root)
+	var hull := MeshInstance3D.new()
+	hull.name = "abrams_hull"
+	hull.mesh = _abrams_hull
+	body.add_child(hull)
+	_nose(body, -3.3)
+	host._conform_forward(body)
+	var turret := Node3D.new()
+	turret.name = "turret"
+	turret.position = _abrams_pivot
+	root.add_child(turret)
+	var shell := MeshInstance3D.new()
+	shell.name = "abrams_turret"
+	shell.mesh = _abrams_turret
+	turret.add_child(shell)
+	host._muzzle(turret, Vector3(0, 0.08, -4.0))
+	return true
+
+
+func _procedural_tank(root: Node3D, paint: String) -> void:
 	var body := _holder(root)
 	_tracked_hull(body, paint, 2.15, 0.85, 6.8, 0.62)
 	_hard_box(body, paint, Vector3(0, 0.95, -2.35), Vector3(2.0, 0.55, 1.5), 0.08)
