@@ -3,7 +3,7 @@ Convoy Command art credits
 Kenney Car Kit
 https://kenney.nl/assets/car-kit
 License: CC0 1.0
-The vehicle meshes in game are original. The Kenney car kit remains in the repo and is not used on the current units.
+Used for the cargo truck, humvee, MRAP, repair van, fuel flatbed, engineer tractor, medic ambulance, and technical.
 
 Kenney Mini Characters
 https://kenney.nl/assets/mini-characters
@@ -18,10 +18,9 @@ Used for trees, cacti, palms, and rocks.
 Quaternius Animated Tanks
 https://quaternius.com/packs/animatedtanks.html
 License: CC0 1.0
-The tank pack remains in the repo and is not used on the current units.
+Used for the APC, anti-air, and mortar, and for hostile tanks, IFVs, SPAAG, and artillery.
 
-Cargo trucks, MRAPs, APCs, tanks, SPAAG, mortars, fuel tankers, engineers, medevac vans, escort helicopters, and hostile vehicles are original meshes made for this project. They are not copied from Arma 3 or Bohemia Interactive.
-Camo, mud, and metal materials on those meshes are original.
-License texts for the CC0 packs that remain in the tree are in assets/cc0/.
+The player tank is the owner's M1 Abrams (assets/models/m1_abrams_hull.glb and m1_abrams_turret.glb), a Meshy AI model kept at full resolution (3.28 million triangles, original 2048 PBR textures), split into hull and turret so the gunner seat can aim it.
 
-The player M1 Abrams tank (assets/models/m1_abrams_hull.glb, m1_abrams_turret.glb) is the owner's own Meshy AI model at full resolution (3.28M triangles, original 2048 PBR textures), split into hull and turret for the game.
+Escort and hostile helicopters are original meshes made for this project. No vehicle is copied from Arma 3 or Bohemia Interactive.
+License texts for the CC0 packs are in assets/cc0/.

@@ -30,32 +30,39 @@ func build(kind: String, enemy: bool = false, camo_name: String = "") -> Node3D:
 	var mil = _vehicles()
 	match kind:
 		"cargo":
-			mil.cargo(root, paint)
-			_flag(root, Vector3(0, 2.7, 0.4))
+			_mount_car(root, "res://assets/cc0/vehicles/truck.glb", 1.95, enemy)
+			_flag(root, Vector3(0, 2.7, 0.45))
 		"humvee":
-			mil.humvee(root, paint)
+			_mount_car(root, "res://assets/cc0/vehicles/suv.glb", 1.95, enemy)
+			_gun_turret(root, Vector3(0, 2.38, -0.15), 1.15, 0.045, paint)
 		"mrap":
-			mil.mrap(root, paint)
+			_mount_car(root, "res://assets/cc0/vehicles/van.glb", 1.95, enemy)
+			_gun_turret(root, Vector3(0, 2.48, -0.05), 1.25, 0.05, paint)
 		"apc", "ifv":
-			mil.apc(root, paint)
+			_mount_tank(root, "res://assets/cc0/military/Tank2.fbx", 0.36, enemy)
 		"tank":
-			mil.tank(root, paint)
+			if enemy:
+				_mount_tank(root, "res://assets/cc0/military/Tank.fbx", 0.36, true)
+			else:
+				mil.tank(root, paint)
 		"aa", "spaa":
-			mil.aa(root, paint)
+			_mount_tank(root, "res://assets/cc0/military/Tank4.fbx", 0.36, enemy)
 		"mortar", "bombard":
-			mil.mortar(root, paint)
+			_mount_tank(root, "res://assets/cc0/military/Tank3.fbx", 0.36, enemy)
 		"repair":
-			mil.repair(root, paint)
+			_mount_car(root, "res://assets/cc0/vehicles/delivery.glb", 1.9, enemy)
 		"fuel":
-			mil.fuel(root, paint)
+			_mount_car(root, "res://assets/cc0/vehicles/truck-flat.glb", 1.95, enemy)
 		"engineer":
-			mil.engineer(root, paint)
+			_mount_car(root, "res://assets/cc0/vehicles/tractor.glb", 2.05, enemy)
+			_gun_turret(root, Vector3(0, 3.05, -0.15), 1.05, 0.04, paint)
 		"medic":
-			mil.medic(root, paint)
+			_mount_car(root, "res://assets/cc0/vehicles/ambulance.glb", 1.85, enemy)
 		"escort":
 			mil.heli(root, paint)
 		"technical":
-			mil.technical(root, paint)
+			_mount_car(root, "res://assets/cc0/vehicles/suv.glb", 1.95, enemy)
+			_gun_turret(root, Vector3(0, 2.38, -0.15), 1.15, 0.045, paint)
 		"infantry":
 			root.add_child(_person(enemy, false))
 		"rpg":
@@ -69,9 +76,12 @@ func build(kind: String, enemy: bool = false, camo_name: String = "") -> Node3D:
 		"heli":
 			mil.heli(root, "hostile" if enemy else paint)
 		_:
-			mil.cargo(root, paint)
+			_mount_car(root, "res://assets/cc0/vehicles/truck.glb", 1.95, enemy)
 	if kind != "infantry" and kind != "rpg" and kind != "heli" and kind != "escort":
-		_dust(root, 2.4)
+		var rear := 2.2
+		if root.has_meta("rear"):
+			rear = maxf(float(root.get_meta("rear")) - 0.15, 0.4)
+		_dust(root, rear)
 	if kind == "heli" or kind == "escort":
 		_wash(root)
 	_blob(root, 2.4 if kind == "tank" or kind == "heli" or kind == "escort" else 1.7)
@@ -167,23 +177,180 @@ func _simple_prop(kind: String) -> Node3D:
 	return root
 
 
-func _quaternius(root: Node3D, path: String, scale: float) -> void:
-	var holder := Node3D.new()
-	holder.name = "body"
-	holder.rotation_degrees = Vector3(0, 180, 0)
-	holder.scale = Vector3.ONE * scale
+func _mount_car(root: Node3D, path: String, model_scale: float, enemy: bool) -> void:
+	var body := Node3D.new()
+	body.name = "body"
+	var align := Node3D.new()
+	align.name = "align"
+	# Kenney cars face +Z. Yaw lives on this child so the hull test can see it.
+	align.transform = Transform3D(_yaw_basis(180.0, model_scale), Vector3.ZERO)
 	var inst := _instantiate(path)
 	if inst == null:
-		root.add_child(holder)
+		root.add_child(body)
+		_nose_from_bounds(root)
 		return
-	holder.add_child(inst)
-	root.add_child(holder)
-	_keep_model_materials(inst)
+	var spare := inst.find_child("wheel-back", true, false)
+	if spare != null and str(spare.name) == "wheel-back":
+		spare.name = "spare"
+	align.add_child(inst)
+	body.add_child(align)
+	root.add_child(body)
+	if enemy:
+		_hostile_tint(inst)
+	_nose_from_bounds(root)
+
+
+func _mount_tank(root: Node3D, path: String, model_scale: float, enemy: bool) -> void:
+	var body := Node3D.new()
+	body.name = "body"
+	var align := Node3D.new()
+	align.name = "align"
+	# Quaternius hulls and guns run along -X. Yaw -90 maps that onto -Z.
+	align.transform = Transform3D(_yaw_basis(-90.0, model_scale), Vector3.ZERO)
+	var inst := _instantiate(path)
+	if inst == null:
+		root.add_child(body)
+		_nose_at(root, -3.2)
+		_gun_turret(root, Vector3(0, 1.5, 0), 1.6, 0.06, "olive")
+		return
+	align.add_child(inst)
+	body.add_child(align)
+	root.add_child(body)
+	_silence_anims(inst)
+	if enemy:
+		_hostile_tint(inst)
 	var turret := Node3D.new()
 	turret.name = "turret"
-	turret.position = Vector3(0, 1.5, -0.2)
+	var tur_mi := inst.find_child("Tank_Turret", true, false) as MeshInstance3D
+	if tur_mi != null and tur_mi.mesh != null:
+		var tur_xf := _to_ancestor(tur_mi, root)
+		turret.position = tur_xf * tur_mi.mesh.get_aabb().get_center()
+	else:
+		turret.position = Vector3(0, 1.5, 0.2)
 	root.add_child(turret)
-	_muzzle(turret, Vector3(0, 0.35, -1.8))
+	if tur_mi != null:
+		_reparent_keep(tur_mi, turret, root)
+	var gun_mi := inst.find_child("Tank_Gun", true, false) as MeshInstance3D
+	if gun_mi != null:
+		_reparent_keep(gun_mi, turret, root)
+		_muzzle_on_barrel(turret, gun_mi)
+	else:
+		_muzzle(turret, Vector3(0, 0.2, -1.6))
+	_nose_from_bounds(root)
+
+
+func _yaw_basis(degrees: float, model_scale: float) -> Basis:
+	var basis := Basis(Vector3.UP, deg_to_rad(degrees))
+	return basis.scaled(Vector3(model_scale, model_scale, model_scale))
+
+
+func _to_ancestor(node: Node3D, ancestor: Node) -> Transform3D:
+	var xf := Transform3D.IDENTITY
+	var current: Node = node
+	while current is Node3D and current != ancestor:
+		xf = (current as Node3D).transform * xf
+		current = current.get_parent()
+	return xf
+
+
+func _reparent_keep(node: Node3D, new_parent: Node3D, space: Node) -> void:
+	var xf := _to_ancestor(node, space)
+	var parent_xf := _to_ancestor(new_parent, space)
+	var old := node.get_parent()
+	node.owner = null
+	if old != null:
+		old.remove_child(node)
+	new_parent.add_child(node)
+	node.transform = parent_xf.affine_inverse() * xf
+
+
+func _muzzle_on_barrel(turret: Node3D, gun: MeshInstance3D) -> void:
+	if gun.mesh == null:
+		_muzzle(turret, Vector3(0, 0.2, -1.6))
+		return
+	var aabb := gun.mesh.get_aabb()
+	var tip := Vector3(0, 0, 1.0e9)
+	for i in 8:
+		var corner: Vector3 = gun.transform * aabb.get_endpoint(i)
+		if corner.z < tip.z:
+			tip = corner
+	if absf(tip.x) > 0.32 and absf(tip.x) < 0.8:
+		tip.x = 0.0
+	if tip.z > -0.5:
+		tip = Vector3(0, tip.y, -1.6)
+	_muzzle(turret, tip)
+
+
+func _nose_from_bounds(root: Node3D) -> void:
+	var box := _merged_aabb(root)
+	var front := box.position.z - 0.25
+	if front > -1.0:
+		front = -1.6
+	_nose_at(root, front)
+	root.set_meta("rear", box.position.z + box.size.z)
+
+
+func _nose_at(root: Node3D, z: float) -> void:
+	if root.get_node_or_null("nose") != null:
+		return
+	var nose := Marker3D.new()
+	nose.name = "nose"
+	nose.position = Vector3(0, 0.9, z)
+	root.add_child(nose)
+
+
+func _merged_aabb(node: Node) -> AABB:
+	var box := {"min": Vector3(1.0e9, 1.0e9, 1.0e9), "max": Vector3(-1.0e9, -1.0e9, -1.0e9), "n": 0}
+	_merge_walk(node, Transform3D.IDENTITY, box, false)
+	if int(box["n"]) == 0:
+		return AABB(Vector3(-1, 0, -2), Vector3(2, 2, 4))
+	var mn: Vector3 = box["min"]
+	var mx: Vector3 = box["max"]
+	return AABB(mn, mx - mn)
+
+
+func _merge_walk(n: Node, parent_xf: Transform3D, box: Dictionary, skip_self: bool) -> void:
+	var xf := parent_xf
+	if n is Node3D and not skip_self:
+		xf = parent_xf * (n as Node3D).transform
+	if n is MeshInstance3D and (n as MeshInstance3D).mesh != null:
+		var aabb: AABB = (n as MeshInstance3D).mesh.get_aabb()
+		var mn: Vector3 = box["min"]
+		var mx: Vector3 = box["max"]
+		for i in 8:
+			var corner: Vector3 = xf * aabb.get_endpoint(i)
+			mn = mn.min(corner)
+			mx = mx.max(corner)
+		box["min"] = mn
+		box["max"] = mx
+		box["n"] = int(box["n"]) + 1
+	for c in n.get_children():
+		_merge_walk(c, xf, box, false)
+
+
+func _silence_anims(node: Node) -> void:
+	for found in node.find_children("*", "AnimationPlayer", true, false):
+		var anim := found as AnimationPlayer
+		if anim == null:
+			continue
+		anim.active = false
+		anim.autoplay = ""
+
+
+func _hostile_tint(node: Node) -> void:
+	for found in node.find_children("*", "MeshInstance3D", true, false):
+		var mesh_inst := found as MeshInstance3D
+		if mesh_inst == null or mesh_inst.mesh == null:
+			continue
+		for s in mesh_inst.mesh.get_surface_count():
+			var src: Material = mesh_inst.get_surface_override_material(s)
+			if src == null:
+				src = mesh_inst.mesh.surface_get_material(s)
+			if not (src is StandardMaterial3D):
+				continue
+			var dup := (src as StandardMaterial3D).duplicate() as StandardMaterial3D
+			dup.albedo_color = dup.albedo_color.lerp(Color(0.72, 0.24, 0.18), 0.5)
+			mesh_inst.set_surface_override_material(s, dup)
 
 
 func _keep_model_materials(node: Node) -> void:
@@ -210,20 +377,6 @@ func _keep_model_materials(node: Node) -> void:
 			dup.roughness = clampf(dup.roughness, 0.62, 0.92)
 			dup.metallic = minf(dup.metallic, 0.15)
 			mesh_inst.set_surface_override_material(s, dup)
-
-
-func _kenney(root: Node3D, path: String, scale: float, paint: String, enemy: bool) -> void:
-	var holder := Node3D.new()
-	holder.name = "body"
-	holder.rotation_degrees = Vector3(0, 180, 0)
-	holder.scale = Vector3.ONE * scale
-	var inst := _instantiate(path)
-	var spare := inst.find_child("wheel-back", true, false)
-	if spare != null and str(spare.name) == "wheel-back":
-		spare.name = "spare"
-	holder.add_child(inst)
-	root.add_child(holder)
-	_tint_tree(inst, paint, enemy)
 
 
 func _apc(root: Node3D, paint: String) -> void:
