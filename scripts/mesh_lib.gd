@@ -30,16 +30,28 @@ func build(kind: String, enemy: bool = false, camo_name: String = "") -> Node3D:
 	var mil = _vehicles()
 	match kind:
 		"cargo":
-			_mount_car(root, "res://assets/cc0/vehicles/truck.glb", 1.95, enemy)
+			if enemy:
+				_mount_car(root, "res://assets/cc0/vehicles/truck.glb", 1.95, enemy)
+			else:
+				mil.cargo(root, paint)
 			_flag(root, Vector3(0, 2.7, 0.45))
 		"humvee":
-			_mount_car(root, "res://assets/cc0/vehicles/suv.glb", 1.95, enemy)
-			_gun_turret(root, Vector3(0, 2.38, -0.15), 1.15, 0.045, paint)
+			if enemy:
+				_mount_car(root, "res://assets/cc0/vehicles/suv.glb", 1.95, enemy)
+				_gun_turret(root, Vector3(0, 2.38, -0.15), 1.15, 0.045, paint)
+			else:
+				mil.humvee(root, paint)
 		"mrap":
-			_mount_car(root, "res://assets/cc0/vehicles/van.glb", 1.95, enemy)
-			_gun_turret(root, Vector3(0, 2.48, -0.05), 1.25, 0.05, paint)
+			if enemy:
+				_mount_car(root, "res://assets/cc0/vehicles/van.glb", 1.95, enemy)
+				_gun_turret(root, Vector3(0, 2.48, -0.05), 1.25, 0.05, paint)
+			else:
+				mil.mrap(root, paint)
 		"apc", "ifv":
-			_mount_tank(root, "res://assets/cc0/military/Tank2.fbx", 0.36, enemy)
+			if enemy or kind == "ifv":
+				_mount_tank(root, "res://assets/cc0/military/Tank2.fbx", 0.36, enemy)
+			else:
+				mil.apc(root, paint)
 		"tank":
 			if enemy:
 				_mount_tank(root, "res://assets/cc0/military/Tank.fbx", 0.36, true)
