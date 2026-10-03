@@ -6,7 +6,77 @@ extends RefCounted
 var host
 
 
+const OWN_SPECULAR := 0.18
+var _part_mesh := {}
+var _part_pos := {}
+
+
+func _part(path: String) -> MeshInstance3D:
+	if not _part_mesh.has(path):
+		if not ResourceLoader.exists(path):
+			return null
+		var scene := load(path) as PackedScene
+		if scene == null:
+			return null
+		var src := scene.instantiate() as Node3D
+		var mi := src.find_child("*", true, false) as MeshInstance3D
+		if mi == null and src is MeshInstance3D:
+			mi = src as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			src.free()
+			return null
+		if path.find("stryker") < 0:
+			for i in mi.mesh.get_surface_count():
+				var mat := mi.mesh.surface_get_material(i) as BaseMaterial3D
+				if mat != null:
+					mat.metallic_specular = OWN_SPECULAR
+		_part_mesh[path] = mi.mesh
+		_part_pos[path] = mi.position
+		src.free()
+	var out := MeshInstance3D.new()
+	out.mesh = _part_mesh[path]
+	return out
+
+
+# Player vehicles from the owner's full-resolution models. GLBs are baked to
+# meters, ground at y=0, forward on -Z. A turret mesh is parented to the
+# turret node; an aim-only turret keeps gunner mode working when the gun is
+# part of a single mesh and cannot rotate on its own.
+func _own_vehicle(root: Node3D, body_paths: Array, nose_z: float, turret_path: String, muzzle: Vector3, aim: bool, aim_pos: Vector3) -> bool:
+	var parts: Array[MeshInstance3D] = []
+	for path in body_paths:
+		var mi := _part(str(path))
+		if mi == null:
+			for made in parts:
+				made.free()
+			return false
+		parts.append(mi)
+	var turret_mi: MeshInstance3D = null
+	if turret_path != "":
+		turret_mi = _part(turret_path)
+		if turret_mi == null:
+			for made in parts:
+				made.free()
+			return false
+	var body := _holder(root)
+	for mi in parts:
+		body.add_child(mi)
+	_nose(body, nose_z)
+	host._conform_forward(body)
+	if turret_mi != null or aim:
+		var turret := Node3D.new()
+		turret.name = "turret"
+		turret.position = _part_pos[turret_path] if turret_mi != null else aim_pos
+		root.add_child(turret)
+		if turret_mi != null:
+			turret.add_child(turret_mi)
+		host._muzzle(turret, muzzle)
+	return true
+
+
 func cargo(root: Node3D, paint: String) -> void:
+	if paint != "hostile" and _own_vehicle(root, ["res://assets/models/fmtv_front.glb", "res://assets/models/fmtv_rear.glb"], -3.25, "", Vector3.ZERO, false, Vector3.ZERO):
+		return
 	var body := _holder(root)
 	_hull(body, paint, 2.35, 1.15, 6.6, 0.55)
 	_cab(body, paint, Vector3(0, 1.55, -1.85), Vector3(2.15, 1.15, 2.1))
@@ -22,6 +92,8 @@ func cargo(root: Node3D, paint: String) -> void:
 
 
 func humvee(root: Node3D, paint: String) -> void:
+	if paint != "hostile" and _own_vehicle(root, ["res://assets/models/hmmwv_body.glb"], -2.3, "", Vector3(0, 0.2, -1.15), true, Vector3(0, 2.15, 0.15)):
+		return
 	var body := _holder(root)
 	_hull(body, paint, 2.05, 0.85, 4.7, 0.48)
 	_cab(body, paint, Vector3(0, 1.35, -0.15), Vector3(1.9, 0.85, 2.3))
@@ -37,6 +109,8 @@ func humvee(root: Node3D, paint: String) -> void:
 
 
 func mrap(root: Node3D, paint: String) -> void:
+	if paint != "hostile" and _own_vehicle(root, ["res://assets/models/mrap_front.glb", "res://assets/models/mrap_rear.glb"], -2.75, "", Vector3(0, 0.25, -1.1), true, Vector3(0, 2.8, 0.4)):
+		return
 	var body := _holder(root)
 	_hull(body, paint, 2.35, 1.05, 5.6, 0.62)
 	_hard_box(body, paint, Vector3(0, 0.42, 0.1), Vector3(1.5, 0.35, 4.4), 0.08)
@@ -64,6 +138,8 @@ func mrap(root: Node3D, paint: String) -> void:
 
 
 func apc(root: Node3D, paint: String) -> void:
+	if paint != "hostile" and _own_vehicle(root, ["res://assets/models/stryker_hull.glb"], -3.15, "res://assets/models/stryker_turret.glb", Vector3(0.05, 0.56, -0.55), false, Vector3.ZERO):
+		return
 	var body := _holder(root)
 	_tracked_hull(body, paint, 2.55, 1.15, 6.4, 0.72)
 	_hard_box(body, paint, Vector3(0, 1.55, -1.7), Vector3(2.2, 0.55, 1.5), 0.08)
