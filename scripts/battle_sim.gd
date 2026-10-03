@@ -21,6 +21,13 @@ var ambush_spawned: Array = []
 var finished_sent := false
 var next_id := 1
 var rng := RandomNumberGenerator.new()
+var sandbox := false
+var god_mode := false
+var threat := 1.0
+var ieds: Array = []
+var fuel_clock := 0.0
+var player_gun_id := -1
+var charge_cap := {"smoke": 0, "airstrike": 0, "repair": 0}
 
 func start(p_level: Dictionary, roster: Array, p_route, combat_seed: int) -> void:
 	level = p_level
@@ -49,8 +56,40 @@ func start(p_level: Dictionary, roster: Array, p_route, combat_seed: int) -> voi
 		"repair": int(src["repair"]),
 	}
 	smoke_timer = 0.0
+	fuel_clock = 0.0
+	player_gun_id = -1
+	ieds.clear()
+	charge_cap = {
+		"smoke": int(src["smoke"]),
+		"airstrike": int(src["airstrike"]),
+		"repair": int(src["repair"]),
+	}
+	for spec in level.get("ieds", []):
+		if typeof(spec) != TYPE_DICTIONARY:
+			continue
+		var mine_at := float(spec.get("at", 0.0))
+		var sm_m: Dictionary = route.sample(mine_at)
+		var mine_pos: Vector3 = sm_m["pos"] + sm_m["right"] * float(spec.get("lat", 0.0))
+		ieds.append({
+			"pos": mine_pos,
+			"live": true,
+			"warn": false,
+			"fuse": 1.15,
+		})
 	for i in roster.size():
-		_add_friendly(str(roster[i]), -float(i) * Defs.SPACING)
+		var entry = roster[i]
+		if typeof(entry) == TYPE_DICTIONARY:
+			_add_friendly(
+				str(entry["kind"]),
+				Defs.unit_along(entry),
+				Defs.unit_lateral(entry),
+				float(entry.get("yaw", 0.0)),
+				int(entry.get("armor", 0)),
+				int(entry.get("weapon", 0)),
+				int(entry.get("speed", 0))
+			)
+		else:
+			_add_friendly(str(entry), -float(i) * Defs.SPACING, 0.0, 0.0, 0, 0, 0)
 
 
 func tick(dt: float) -> void:
@@ -66,6 +105,8 @@ func tick(dt: float) -> void:
 	_separate_enemies()
 	_acquire_targets()
 	_passive_repairs(dt)
+	_tick_fuel(dt)
+	_tick_ieds(dt)
 	_friendly_fire(dt)
 	_enemy_fire(dt)
 	_resolve_strikes()
@@ -80,7 +121,10 @@ func try_ability(ability: String) -> bool:
 		return false
 	if ability == "smoke":
 		charges["smoke"] = int(charges["smoke"]) - 1
-		smoke_timer = 7.5
+		var dur := 7.5
+		if _living_role("fuel"):
+			dur *= 1.5
+		smoke_timer = dur
 		events.append({"type": "ability", "name": "smoke"})
 		return true
 	if ability == "repair":
@@ -178,20 +222,28 @@ func progress() -> float:
 	return clampf(lead_s / route.total, 0.0, 1.0)
 
 
-func _add_friendly(kind: String, along: float) -> void:
+func _add_friendly(kind: String, along: float, lateral: float = 0.0, yaw: float = 0.0, armor: int = 0, weapon: int = 0, speed_lv: int = 0) -> void:
 	var spec: Dictionary = Defs.UNITS[kind]
+	var stats: Dictionary = Defs.scaled(kind, armor, weapon, speed_lv)
 	var u := {
 		"id": next_id,
 		"kind": kind,
 		"role": spec["role"],
-		"hp": float(spec["hp"]),
-		"max_hp": float(spec["hp"]),
-		"dmg": float(spec["dmg"]),
+		"hp": float(stats["hp"]),
+		"max_hp": float(stats["hp"]),
+		"dmg": float(stats["dmg"]),
 		"range": float(spec["rng"]),
-		"speed": float(spec["spd"]),
+		"speed": float(stats["spd"]),
 		"rof": float(spec["rof"]),
 		"heal": float(spec["heal"]),
 		"s": along,
+		"lateral": lateral,
+		"yaw": yaw,
+		"armor": armor,
+		"weapon": weapon,
+		"speed_lv": speed_lv,
+		"air": bool(spec.get("air", false)),
+		"alt": float(spec.get("alt", 0.0)),
 		"pos": Vector3.ZERO,
 		"dir": Vector3(0, 0, 1),
 		"cooldown": 0.0,
@@ -199,16 +251,94 @@ func _add_friendly(kind: String, along: float) -> void:
 		"delivered": false,
 		"credited": false,
 		"target_id": -1,
-		"air": false,
 		"moving": true,
 	}
 	next_id += 1
 	if kind == "cargo":
 		cargo_total += 1
-	var sm: Dictionary = route.sample(along)
-	u["pos"] = sm["pos"]
-	u["dir"] = sm["dir"]
+	_place_friendly(u)
 	friendlies.append(u)
+
+
+func _place_friendly(u) -> void:
+	var sm: Dictionary = route.sample(float(u["s"]))
+	u["pos"] = sm["pos"] + sm["right"] * float(u.get("lateral", 0.0))
+	if bool(u.get("air", false)):
+		u["pos"].y = float(u.get("alt", 12.0))
+	var dir: Vector3 = sm["dir"]
+	var yaw := deg_to_rad(float(u.get("yaw", 0.0)))
+	if absf(yaw) > 0.001:
+		dir = Basis(Vector3.UP, yaw) * dir
+	u["dir"] = dir
+
+
+func _living_role(role: String) -> bool:
+	for u in friendlies:
+		if u["alive"] and not u["delivered"] and str(u["role"]) == role:
+			return true
+	return false
+
+
+func _tick_fuel(dt: float) -> void:
+	if not _living_role("fuel"):
+		return
+	fuel_clock += dt
+	if fuel_clock < 22.0:
+		return
+	fuel_clock = 0.0
+	var best := ""
+	var best_n := 99
+	for key in ["smoke", "repair", "airstrike"]:
+		var n := int(charges.get(key, 0))
+		var cap := int(charge_cap.get(key, 0))
+		if n < cap and n < best_n:
+			best_n = n
+			best = key
+	if best == "":
+		return
+	charges[best] = int(charges[best]) + 1
+	events.append({"type": "ability", "name": "fuel"})
+
+
+func _tick_ieds(dt: float) -> void:
+	for mine in ieds:
+		if not bool(mine["live"]):
+			continue
+		var pos: Vector3 = mine["pos"]
+		var found := false
+		var eng_d := 28.0
+		for u in friendlies:
+			if not u["alive"] or u["delivered"] or str(u["role"]) != "engineer":
+				continue
+			var d := Vector2(u["pos"].x, u["pos"].z).distance_to(Vector2(pos.x, pos.z))
+			if d < eng_d:
+				eng_d = d
+				found = true
+		if found:
+			mine["warn"] = true
+			mine["fuse"] = float(mine["fuse"]) - dt
+			if float(mine["fuse"]) <= 0.0:
+				mine["live"] = false
+				events.append({"type": "ied", "action": "clear", "pos": pos})
+			continue
+		for u in friendlies:
+			if not u["alive"] or u["delivered"] or bool(u.get("air", false)):
+				continue
+			if Vector2(u["pos"].x, u["pos"].z).distance_to(Vector2(pos.x, pos.z)) > 3.3:
+				continue
+			mine["live"] = false
+			events.append({"type": "ied", "action": "boom", "pos": pos})
+			for v in friendlies:
+				if not v["alive"] or v["delivered"] or bool(v.get("air", false)):
+					continue
+				var blast := Vector2(v["pos"].x, v["pos"].z).distance_to(Vector2(pos.x, pos.z))
+				if blast > 7.0 or god_mode:
+					continue
+				v["hp"] = float(v["hp"]) - 46.0 * (1.0 - blast / 7.0)
+				if float(v["hp"]) <= 0.0:
+					v["hp"] = 0.0
+					v["alive"] = false
+			break
 
 
 func _move_friendlies(dt: float) -> void:
@@ -216,9 +346,7 @@ func _move_friendlies(dt: float) -> void:
 	for u in friendlies:
 		if not u["alive"] or u["delivered"]:
 			u["moving"] = false
-			var sm_hold: Dictionary = route.sample(float(u["s"]))
-			u["pos"] = sm_hold["pos"]
-			u["dir"] = sm_hold["dir"]
+			_place_friendly(u)
 			continue
 		u["s"] = float(u["s"]) + pace * dt
 		u["moving"] = pace > 0.1
@@ -231,9 +359,7 @@ func _move_friendlies(dt: float) -> void:
 		elif u["role"] != "cargo" and float(u["s"]) > route.total:
 			u["s"] = route.total
 			u["moving"] = false
-		var sm: Dictionary = route.sample(float(u["s"]))
-		u["pos"] = sm["pos"]
-		u["dir"] = sm["dir"]
+		_place_friendly(u)
 		if u["alive"] and not u["delivered"]:
 			lead_s = maxf(lead_s, minf(float(u["s"]), route.total))
 
@@ -264,6 +390,17 @@ func _spawn_ambushes() -> void:
 			_spawn_enemy(sp, float(amb["at"]))
 
 
+func spawn_at(kind: String, pos: Vector3) -> bool:
+	if status != "running" or not Defs.ENEMIES.has(kind):
+		return false
+	var spec: Dictionary = Defs.ENEMIES[kind]
+	var air: bool = bool(spec["air"])
+	var placed := Vector3(pos.x, float(spec["alt"]) if air else 0.0, pos.z)
+	_append_enemy(kind, spec, placed)
+	events.append({"type": "banner", "text": "Contact — %s" % str(spec["name"])})
+	return true
+
+
 func _spawn_enemy(sp: Dictionary, at: float) -> void:
 	var kind := str(sp["k"])
 	var spec: Dictionary = Defs.ENEMIES[kind]
@@ -273,16 +410,22 @@ func _spawn_enemy(sp: Dictionary, at: float) -> void:
 	var pos: Vector3 = sm["pos"] + sm["right"] * lateral
 	var air: bool = bool(spec["air"])
 	pos.y = float(spec["alt"]) if air else 0.0
+	_append_enemy(kind, spec, pos)
+
+
+func _append_enemy(kind: String, spec: Dictionary, pos: Vector3) -> void:
+	var scale := maxf(threat, 0.15)
+	var hp := float(spec["hp"]) * scale
 	var e := {
 		"id": next_id,
 		"kind": kind,
-		"hp": float(spec["hp"]),
-		"max_hp": float(spec["hp"]),
-		"dmg": float(spec["dmg"]),
+		"hp": hp,
+		"max_hp": hp,
+		"dmg": float(spec["dmg"]) * scale,
 		"range": float(spec["rng"]),
 		"speed": float(spec["spd"]),
 		"rof": float(spec["rof"]),
-		"air": air,
+		"air": bool(spec["air"]),
 		"alt": float(spec["alt"]),
 		"pos": pos,
 		"cooldown": rng.randf_range(0.25, 0.7),
@@ -364,7 +507,9 @@ func _acquire_targets() -> void:
 
 func _passive_repairs(dt: float) -> void:
 	for u in friendlies:
-		if not u["alive"] or u["delivered"] or u["role"] != "repair":
+		if not u["alive"] or u["delivered"]:
+			continue
+		if u["role"] != "repair" and u["role"] != "medic":
 			continue
 		var best = null
 		var best_score := 0.0
@@ -388,6 +533,8 @@ func _friendly_fire(dt: float) -> void:
 		if not u["alive"] or u["delivered"] or float(u["dmg"]) <= 0.0:
 			continue
 		u["cooldown"] = maxf(0.0, float(u["cooldown"]) - dt)
+		if int(u["id"]) == player_gun_id:
+			continue
 		if float(u["cooldown"]) > 0.0:
 			continue
 		var tgt = _find_enemy(int(u["target_id"]))
@@ -406,8 +553,109 @@ func _friendly_fire(dt: float) -> void:
 			profile = "aa"
 		elif u["role"] == "medium":
 			profile = "medium"
+		if u["role"] == "artillery":
+			profile = "heavy"
 		var lift := 0.2 if bool(tgt["air"]) else 1.0
-		_fire(u, tgt, u["pos"] + Vector3(0, 1.35, 0), dst + Vector3(0, lift, 0), float(u["dmg"]) * mult, profile, "friendly", 0.84)
+		var origin_y := float(u.get("alt", 0.0)) + 1.2 if bool(u.get("air", false)) else 1.35
+		_fire(u, tgt, u["pos"] + Vector3(0, origin_y, 0), dst + Vector3(0, lift, 0), float(u["dmg"]) * mult, profile, "friendly", 0.84)
+		if u["role"] == "artillery":
+			for other in enemies:
+				if other == tgt or not other["alive"]:
+					continue
+				var splash := Vector2(other["pos"].x, other["pos"].z).distance_to(Vector2(dst.x, dst.z))
+				if splash > 6.5:
+					continue
+				other["hp"] = float(other["hp"]) - float(u["dmg"]) * 0.38
+				if float(other["hp"]) <= 0.0:
+					other["hp"] = 0.0
+					other["alive"] = false
+
+
+func player_shot(unit_id: int, src: Vector3, aim: Vector3, dmg: float, profile: String, rof: float, indirect: bool) -> bool:
+	var attacker = _find_friendly(unit_id)
+	if attacker == null or not attacker["alive"] or attacker["delivered"]:
+		return false
+	attacker["cooldown"] = 1.0 / maxf(rof, 0.05)
+	var weapon := "bullet"
+	if profile == "aa":
+		weapon = "aa"
+	elif profile == "heavy":
+		weapon = "shell"
+	if indirect:
+		events.append({
+			"type": "tracer",
+			"a": src,
+			"b": aim,
+			"profile": profile,
+			"team": "friendly",
+			"hit": true,
+			"weapon": weapon,
+			"target_kind": "",
+		})
+		var splashed := false
+		for e in enemies:
+			if not e["alive"]:
+				continue
+			var blast: float = Vector2(e["pos"].x, e["pos"].z).distance_to(Vector2(aim.x, aim.z))
+			if blast > 6.5:
+				continue
+			var fall := 1.0 - blast / 6.5
+			e["hp"] = float(e["hp"]) - dmg * (0.45 + 0.55 * fall)
+			if float(e["hp"]) <= 0.0:
+				e["hp"] = 0.0
+				e["alive"] = false
+			splashed = true
+		return splashed
+	var dir := aim - src
+	if dir.length() < 0.2:
+		return false
+	dir = dir.normalized()
+	var reach := src.distance_to(aim)
+	var best = null
+	var best_t := reach + 1.0
+	for e in enemies:
+		if not e["alive"]:
+			continue
+		var lift := 1.2 if bool(e["air"]) else 1.0
+		var body := Vector3(e["pos"].x, e["pos"].y + lift, e["pos"].z)
+		var to := body - src
+		var t := to.dot(dir)
+		if t < 1.2 or t > reach + 0.4:
+			continue
+		var closest := src + dir * t
+		var miss := closest.distance_to(body)
+		var radius := 1.45
+		if bool(e["air"]):
+			radius = 2.4
+		if miss > radius or t >= best_t:
+			continue
+		best_t = t
+		best = e
+	var end := aim
+	var hit := best != null
+	if hit:
+		var hit_lift := 1.2 if bool(best["air"]) else 1.0
+		end = Vector3(best["pos"].x, best["pos"].y + hit_lift, best["pos"].z)
+	events.append({
+		"type": "tracer",
+		"a": src,
+		"b": end,
+		"profile": profile,
+		"team": "friendly",
+		"hit": hit,
+		"weapon": weapon,
+		"target_kind": str(best["kind"]) if hit else "",
+	})
+	if not hit:
+		return false
+	var mult := Defs.air_multiplier(str(attacker["role"]), bool(best["air"]))
+	if mult <= 0.0:
+		return false
+	best["hp"] = float(best["hp"]) - dmg * mult * rng.randf_range(0.96, 1.04)
+	if float(best["hp"]) <= 0.0:
+		best["hp"] = 0.0
+		best["alive"] = false
+	return true
 
 
 func _enemy_fire(dt: float) -> void:
@@ -437,6 +685,13 @@ func _fire(attacker, target, src: Vector3, dst: Vector3, dmg: float, profile: St
 	var aim := dst
 	if not hit:
 		aim = dst + Vector3(rng.randf_range(-3.5, 3.5), rng.randf_range(-0.4, 1.4), rng.randf_range(-3.5, 3.5))
+	var weapon := "bullet"
+	if profile == "aa":
+		weapon = "aa"
+	elif profile == "heavy":
+		weapon = "shell"
+	if str(attacker.get("kind", "")) == "rpg":
+		weapon = "rocket"
 	events.append({
 		"type": "tracer",
 		"a": src,
@@ -444,8 +699,10 @@ func _fire(attacker, target, src: Vector3, dst: Vector3, dmg: float, profile: St
 		"profile": profile,
 		"team": team,
 		"hit": hit,
+		"weapon": weapon,
+		"target_kind": str(target.get("kind", "")),
 	})
-	if not hit:
+	if not hit or (god_mode and team == "enemy"):
 		return
 	target["hp"] = float(target["hp"]) - dmg * rng.randf_range(0.92, 1.08)
 	if float(target["hp"]) <= 0.0:
@@ -474,7 +731,7 @@ func _resolve_strikes() -> void:
 			if float(e["hp"]) <= 0.0:
 				e["hp"] = 0.0
 				e["alive"] = false
-		events.append({"type": "boom", "pos": pos, "big": true})
+		events.append({"type": "boom", "pos": pos, "big": true, "strike": true})
 
 
 func _cleanup() -> void:
@@ -509,7 +766,7 @@ func _check_end() -> void:
 		status = "lost"
 	elif cargo_left == 0:
 		status = "won" if delivered > 0 else "lost"
-	elif time > 240.0:
+	elif time > 240.0 and not sandbox:
 		status = "lost"
 	if status != "running" and not finished_sent:
 		finished_sent = true
@@ -551,8 +808,10 @@ func _best_friendly_for(e) -> Variant:
 		var score := -d
 		if u["role"] == "cargo":
 			score += 55.0
-		elif u["role"] == "repair":
+		elif u["role"] == "repair" or u["role"] == "medic" or u["role"] == "fuel":
 			score += 10.0
+		if str(e.get("kind", "")) == "spaa" and bool(u.get("air", false)):
+			score += 80.0
 		if score > best_score:
 			best_score = score
 			best = u

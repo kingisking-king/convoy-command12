@@ -17,6 +17,23 @@ signal next_pressed
 signal retry_pressed
 signal menu_pressed
 signal resume_pressed
+signal rotate_pressed
+signal remove_pressed
+signal arrange_pressed(style: String)
+signal upgrade_pressed(stat: String, level: int)
+signal camo_pressed(camo_name: String)
+signal name_changed(convoy_name: String)
+signal preset_save(preset_name: String)
+signal preset_load(preset_name: String)
+signal preset_delete(preset_name: String)
+signal sandbox_pressed
+signal missions_pressed
+signal mission_picked(index: int)
+signal sandbox_arm_pressed
+signal sandbox_god_toggled(on: bool)
+signal sandbox_speed_changed(speed: float)
+signal sandbox_threat_changed(scale: float)
+signal sandbox_restart_pressed
 
 var audio = null
 var root: Control
@@ -25,6 +42,7 @@ var help_box: PanelContainer
 var brief_box: PanelContainer
 var build_top: PanelContainer
 var build_bottom: PanelContainer
+var build_dock: PanelContainer
 var drive_top: PanelContainer
 var drive_bottom: PanelContainer
 var pause_box: PanelContainer
@@ -50,6 +68,11 @@ var build_budget: Label
 var build_column: Label
 var build_warn: Label
 var deploy_button: Button
+var name_edit: LineEdit
+var preset_edit: LineEdit
+var preset_pick: OptionButton
+var upgrade_label: Label
+var camo_buttons := {}
 var drive_title: Label
 var drive_progress: ProgressBar
 var drive_cargo: Label
@@ -63,6 +86,34 @@ var result_title: Label
 var result_grade: Label
 var result_body: Label
 var result_next: Button
+var result_retry: Button
+var pause_retry: Button
+var sandbox_box: PanelContainer
+var sandbox_drive: PanelContainer
+var sandbox_map_buttons: Array = []
+var sandbox_map_index := 0
+var sandbox_spins := {}
+var sandbox_god: CheckBox
+var sandbox_diff: HSlider
+var sandbox_speed: HSlider
+var sandbox_diff_label: Label
+var sandbox_speed_label: Label
+var drive_god: CheckBox
+var drive_diff: HSlider
+var drive_speed: HSlider
+var drive_diff_label: Label
+var drive_speed_label: Label
+var spawn_pick: OptionButton
+var mission_box: PanelContainer
+var mission_list: VBoxContainer
+var sandbox_sync := false
+var gunner_box: Control
+var gunner_title: Label
+var gunner_ammo: Label
+var gunner_state: Label
+var gunner_heat: ProgressBar
+var gunner_cross: Control
+var gunner_on := false
 
 func setup(p_audio) -> void:
 	audio = p_audio
@@ -73,10 +124,13 @@ func setup(p_audio) -> void:
 	root.theme = _theme()
 	add_child(root)
 	_build_menu()
+	_build_sandbox()
+	_build_missions()
 	_build_help()
 	_build_brief()
 	_build_build()
 	_build_drive()
+	_build_gunner()
 	_build_pause()
 	_build_results()
 	banner = Label.new()
@@ -131,10 +185,16 @@ func hovering_ui() -> bool:
 	return c != null and c.mouse_filter != Control.MOUSE_FILTER_IGNORE
 
 
+func typing() -> bool:
+	var focus := get_viewport().gui_get_focus_owner()
+	return focus is LineEdit
+
+
 func hide_all() -> void:
-	for panel in [menu_box, help_box, brief_box, build_top, build_bottom, drive_top, drive_bottom, pause_box, result_box]:
+	for panel in [menu_box, sandbox_box, sandbox_drive, help_box, brief_box, build_top, build_dock, build_bottom, drive_top, drive_bottom, pause_box, result_box, mission_box, gunner_box]:
 		panel.visible = false
 	map.visible = false
+	gunner_on = false
 
 
 func show_menu(bank: int, level_index: int, level_count: int, campaign_done: bool) -> void:
@@ -153,8 +213,48 @@ func show_menu(bank: int, level_index: int, level_count: int, campaign_done: boo
 	else:
 		menu_sub.text = "Build the column. Drive the route. Deliver the cargo."
 		_menu_button("Campaign", play_pressed)
+	_menu_button("Missions", missions_pressed)
+	_menu_button("Sandbox", sandbox_pressed)
 	_menu_button("How to Play", help_pressed)
 	_menu_button("Quit", quit_pressed)
+
+
+func _build_missions() -> void:
+	mission_box = PanelContainer.new()
+	mission_box.set_anchors_preset(Control.PRESET_CENTER)
+	mission_box.offset_left = -360
+	mission_box.offset_right = 360
+	mission_box.offset_top = -280
+	mission_box.offset_bottom = 280
+	mission_box.add_theme_stylebox_override("panel", _style(Color(0.07, 0.08, 0.06, 0.94), Color(0.55, 0.48, 0.28), 10))
+	root.add_child(mission_box)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	mission_box.add_child(box)
+	var title := Label.new()
+	title.text = "MISSIONS"
+	title.add_theme_font_size_override("font_size", 28)
+	box.add_child(title)
+	mission_list = VBoxContainer.new()
+	mission_list.add_theme_constant_override("separation", 6)
+	box.add_child(mission_list)
+	box.add_child(_button("Back", back_pressed))
+	mission_box.visible = false
+
+
+func show_missions(progress: int, cleared: bool) -> void:
+	hide_all()
+	mission_box.visible = true
+	for c in mission_list.get_children():
+		c.queue_free()
+	var levels := Defs.levels()
+	for i in levels.size():
+		var btn := Button.new()
+		var open := cleared or i <= progress
+		btn.text = "%d  %s  —  %s" % [i + 1, levels[i]["name"], "open" if open else "locked"]
+		btn.disabled = not open
+		btn.pressed.connect(mission_picked.emit.bind(i))
+		mission_list.add_child(btn)
 
 
 func show_help() -> void:
@@ -174,53 +274,66 @@ func show_brief(level: Dictionary, index: int, level_count: int, bank: int) -> v
 	]
 
 
-func show_build(level: Dictionary, bank: int, slots: Array, kind: String, p_route) -> void:
+func show_build(level: Dictionary, bank: int, units: Array, kind: String, p_route, state: Dictionary = {}) -> void:
 	hide_all()
 	build_top.visible = true
+	build_dock.visible = true
 	build_bottom.visible = true
 	map.visible = true
 	selected_kind = kind
-	build_title.text = "%s  ·  ARM THE COLUMN" % str(level["name"]).to_upper()
-	var cost := Defs.roster_cost(slots)
-	var cargo := Defs.count_kind(slots, "cargo")
-	build_budget.text = "Budget  $%d" % bank
-	build_column.text = "Column  $%d    left  $%d    cargo  %d" % [cost, bank - cost, cargo]
+	var convoy := str(state.get("name", "Column"))
+	build_title.text = "%s  ·  %s" % [str(level["name"]).to_upper(), convoy.to_upper()]
+	var cost := Defs.roster_cost(units)
+	var cargo := Defs.count_kind(units, "cargo")
+	var unlimited := bool(state.get("unlimited", false))
+	if unlimited:
+		build_budget.text = "Budget  unlimited"
+		build_column.text = "Formation  $%d    vehicles  %d    cargo  %d" % [cost, units.size(), cargo]
+	else:
+		build_budget.text = "Budget  $%d" % bank
+		build_column.text = "Formation  $%d    left  $%d    vehicles  %d    cargo  %d" % [cost, bank - cost, units.size(), cargo]
 	var warn := ""
 	if cargo == 0:
 		warn = "Place at least one cargo truck."
-	elif cost > bank:
-		warn = "That column costs more than the budget."
-	else:
-		for entry in slots:
-			if entry == "":
-				continue
-			if entry == "cargo":
-				warn = "Cargo is leading. It will take the first hits."
-			break
+	elif not unlimited and cost > bank:
+		warn = "That formation costs more than the budget."
+	elif Defs.cargo_is_leading(units):
+		warn = "Cargo is ahead of the guns. It will take the first hits."
 	build_warn.text = warn
-	deploy_button.disabled = cargo == 0 or cost > bank
+	deploy_button.disabled = cargo == 0 or (not unlimited and cost > bank)
 	for key in cards:
 		var btn: Button = cards[key]
 		if key == kind:
 			btn.add_theme_stylebox_override("normal", _style(Color("3a3420"), Color("e2b84a"), 6))
 		else:
 			btn.add_theme_stylebox_override("normal", _style(Color("1c2118"), Color("3c4030"), 6))
+	_sync_dock(state, units)
 	if p_route:
 		var blips: Array = []
-		for i in slots.size():
-			if str(slots[i]) == "":
+		for entry in units:
+			if typeof(entry) != TYPE_DICTIONARY:
 				continue
-			var sm: Dictionary = p_route.sample(-float(i) * Defs.SPACING)
-			var col := Color("e2b84a") if slots[i] == "cargo" else Color("9dc56a")
-			blips.append({"x": sm["pos"].x, "z": sm["pos"].z, "color": col, "r": 4.0 if slots[i] == "cargo" else 3.0})
+			var sm: Dictionary = p_route.sample(Defs.along(int(entry.get("row", 0))))
+			var pos: Vector3 = sm["pos"] + sm["right"] * Defs.lateral(int(entry.get("lane", Defs.CENTER)))
+			var ekind := str(entry.get("kind", ""))
+			var col := Color("e2b84a") if ekind == "cargo" else Color("9dc56a")
+			blips.append({"x": pos.x, "z": pos.z, "color": col, "r": 4.0 if ekind == "cargo" else 3.0})
 		map.set_state(p_route, blips, 0.0)
 
 
-func show_drive() -> void:
+func show_drive(sandbox_mode: bool = false) -> void:
 	hide_all()
 	drive_top.visible = true
 	drive_bottom.visible = true
 	map.visible = true
+	sandbox_drive.visible = sandbox_mode
+	if sandbox_mode:
+		sandbox_sync = true
+		drive_god.button_pressed = sandbox_god.button_pressed
+		drive_diff.value = sandbox_diff.value
+		drive_speed.value = sandbox_speed.value
+		sandbox_sync = false
+		_refresh_sandbox_readout()
 
 
 func refresh_drive(sim, p_route) -> void:
@@ -251,10 +364,15 @@ func refresh_drive(sim, p_route) -> void:
 	drive_cargo.text = cargo_text
 	drive_hp.text = "Column  %d%%" % int(100.0 * hp / maxf(mx, 1.0))
 	drive_hostiles.text = "Hostiles  %d" % sim.living_hostiles()
-	if sim.smoke_timer > 0.0:
-		drive_hint.text = "Smoke is up"
+	if gunner_on:
+		drive_hint.text = "Mouse aim    LMB fire    RMB scope    wheel weapon    Tab next    G exit"
+	elif bool(sim.sandbox):
+		var god_note := "    God mode" if bool(sim.god_mode) else ""
+		drive_hint.text = "G or click a gun to man it. Left click the ground to spawn" + god_note
+	elif sim.smoke_timer > 0.0:
+		drive_hint.text = "Smoke is up.  G takes a gun."
 	else:
-		drive_hint.text = "Q smoke    E airstrike    R repair"
+		drive_hint.text = "G gunner    Q smoke    E airstrike    R repair"
 	smoke_button.text = "SMOKE  x%d" % int(sim.charges["smoke"])
 	strike_button.text = "AIRSTRIKE  x%d" % int(sim.charges["airstrike"])
 	repair_button.text = "REPAIR  x%d" % int(sim.charges["repair"])
@@ -284,6 +402,93 @@ func hide_pause() -> void:
 	pause_box.visible = false
 
 
+func _build_gunner() -> void:
+	gunner_box = Control.new()
+	gunner_box.set_anchors_preset(Control.PRESET_FULL_RECT)
+	gunner_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gunner_box.visible = false
+	root.add_child(gunner_box)
+	gunner_cross = Control.new()
+	gunner_cross.set_anchors_preset(Control.PRESET_CENTER)
+	gunner_cross.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gunner_box.add_child(gunner_cross)
+	for bar in [{"p": Vector2(-18, -1), "s": Vector2(10, 2)}, {"p": Vector2(8, -1), "s": Vector2(10, 2)}, {"p": Vector2(-1, -18), "s": Vector2(2, 10)}, {"p": Vector2(-1, 8), "s": Vector2(2, 10)}]:
+		var mark := ColorRect.new()
+		mark.color = Color(0.95, 0.9, 0.72, 0.92)
+		mark.position = bar["p"]
+		mark.size = bar["s"]
+		mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		gunner_cross.add_child(mark)
+	var dot := ColorRect.new()
+	dot.color = Color(0.95, 0.55, 0.28, 0.95)
+	dot.position = Vector2(-1, -1)
+	dot.size = Vector2(2, 2)
+	dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gunner_cross.add_child(dot)
+	var readout := VBoxContainer.new()
+	readout.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	readout.offset_left = -180
+	readout.offset_right = 180
+	readout.offset_top = -118
+	readout.offset_bottom = -28
+	readout.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gunner_box.add_child(readout)
+	gunner_title = Label.new()
+	gunner_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	gunner_title.add_theme_font_size_override("font_size", 20)
+	gunner_title.add_theme_color_override("font_color", Color("f2d48a"))
+	readout.add_child(gunner_title)
+	gunner_ammo = Label.new()
+	gunner_ammo.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	gunner_ammo.add_theme_font_size_override("font_size", 18)
+	readout.add_child(gunner_ammo)
+	gunner_heat = ProgressBar.new()
+	gunner_heat.max_value = 100
+	gunner_heat.show_percentage = false
+	gunner_heat.custom_minimum_size = Vector2(220, 10)
+	readout.add_child(gunner_heat)
+	gunner_state = Label.new()
+	gunner_state.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	gunner_state.add_theme_color_override("font_color", Color("e7e1cf"))
+	readout.add_child(gunner_state)
+
+
+func refresh_gunner(info: Dictionary) -> void:
+	gunner_on = true
+	gunner_box.visible = true
+	gunner_title.text = "%s  ·  %s" % [str(info.get("vehicle", "")), str(info.get("weapon", ""))]
+	var mag := int(info.get("mag", 0))
+	if mag > 0:
+		gunner_ammo.text = "Ammo  %d / %d" % [int(info.get("ammo", 0)), mag]
+	else:
+		gunner_ammo.text = "Belt"
+	gunner_heat.value = float(info.get("heat", 0.0)) * 100.0
+	gunner_heat.visible = float(info.get("heat_max", 0.0)) > 0.0
+	var note := ""
+	if bool(info.get("overheated", false)):
+		note = "OVERHEATED"
+	elif float(info.get("reload", 0.0)) > 0.0:
+		note = "RELOADING  %.1f" % float(info.get("reload", 0.0))
+	elif bool(info.get("zoom", false)):
+		note = "SCOPED"
+	elif int(info.get("slots", 1)) > 1:
+		note = "Wheel switches weapon"
+	gunner_state.text = note
+	var gap := 8.0 if bool(info.get("zoom", false)) else 14.0
+	var marks := gunner_cross.get_children()
+	if marks.size() >= 4:
+		(marks[0] as ColorRect).position = Vector2(-gap - 10.0, -1)
+		(marks[1] as ColorRect).position = Vector2(gap, -1)
+		(marks[2] as ColorRect).position = Vector2(-1, -gap - 10.0)
+		(marks[3] as ColorRect).position = Vector2(-1, gap)
+
+
+func hide_gunner() -> void:
+	gunner_on = false
+	if gunner_box:
+		gunner_box.visible = false
+
+
 func show_results(payload: Dictionary) -> void:
 	hide_all()
 	result_box.visible = true
@@ -310,8 +515,19 @@ func show_results(payload: Dictionary) -> void:
 	else:
 		lines.append("No payout. War chest stays $%d." % int(payload["bank"]))
 		lines.append("Retry with a tougher column, or spend smoke when the radio calls contact.")
+	if bool(payload.get("sandbox", false)):
+		lines.clear()
+		lines.append("%s" % payload["level_name"])
+		lines.append("Delivered  %d / %d cargo" % [payload["delivered"], payload["cargo_total"]])
+		lines.append("Hostiles destroyed  %d" % payload["kills"])
+		lines.append("Escorts lost  %d" % payload["escorts_lost"])
+		lines.append("Time  %ds" % int(payload["time"]))
+		lines.append("")
+		lines.append("Sandbox run. Campaign progress was not changed.")
 	result_body.text = "\n".join(lines)
-	if won and not bool(payload["last"]):
+	if bool(payload.get("sandbox", false)):
+		result_next.visible = false
+	elif won and not bool(payload["last"]):
 		result_next.text = "Next Mission"
 		result_next.visible = true
 	elif won:
@@ -370,6 +586,284 @@ func _build_menu() -> void:
 	box.add_child(foot)
 
 
+func show_sandbox() -> void:
+	hide_all()
+	sandbox_box.visible = true
+	_mark_sandbox_map(sandbox_map_index)
+	_refresh_sandbox_readout()
+
+
+func sandbox_settings() -> Dictionary:
+	var counts := {}
+	for kind in sandbox_spins.keys():
+		var spin: SpinBox = sandbox_spins[kind]
+		counts[str(kind)] = int(spin.value)
+	return {
+		"map": sandbox_map_index,
+		"counts": counts,
+		"god": sandbox_god.button_pressed,
+		"threat": sandbox_diff.value / 100.0,
+		"speed": sandbox_speed.value / 100.0,
+	}
+
+
+func spawn_kind() -> String:
+	var kinds := ["infantry", "technical", "rpg", "tank", "heli"]
+	var idx := spawn_pick.selected
+	if idx < 0 or idx >= kinds.size():
+		return "infantry"
+	return kinds[idx]
+
+
+func set_sandbox_chrome(on: bool) -> void:
+	pause_retry.text = "Restart Drive" if on else "Retry Mission"
+	result_retry.text = "Restart" if on else "Retry"
+
+
+func _build_sandbox() -> void:
+	sandbox_box = PanelContainer.new()
+	sandbox_box.set_anchors_preset(Control.PRESET_CENTER)
+	sandbox_box.offset_left = -430
+	sandbox_box.offset_right = 430
+	sandbox_box.offset_top = -330
+	sandbox_box.offset_bottom = 330
+	sandbox_box.add_theme_stylebox_override("panel", _style(Color(0.07, 0.08, 0.06, 0.94), Color(0.55, 0.48, 0.28), 10))
+	root.add_child(sandbox_box)
+	var outer := VBoxContainer.new()
+	outer.add_theme_constant_override("separation", 8)
+	sandbox_box.add_child(outer)
+	var title := Label.new()
+	title.text = "SANDBOX"
+	title.add_theme_font_size_override("font_size", 28)
+	outer.add_child(title)
+	var blurb := Label.new()
+	blurb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	blurb.text = "Unlimited budget. Every unit and upgrade is available. This run does not change the campaign."
+	outer.add_child(blurb)
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, 460)
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	outer.add_child(scroll)
+	var body := VBoxContainer.new()
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("separation", 8)
+	scroll.add_child(body)
+	body.add_child(_sandbox_heading("Map"))
+	var maps := GridContainer.new()
+	maps.columns = 3
+	maps.add_theme_constant_override("h_separation", 8)
+	maps.add_theme_constant_override("v_separation", 6)
+	body.add_child(maps)
+	var map_names: Array = Defs.levels()
+	for i in map_names.size():
+		var map_btn := Button.new()
+		map_btn.text = str(map_names[i]["name"])
+		map_btn.custom_minimum_size = Vector2(180, 34)
+		map_btn.pressed.connect(_mark_sandbox_map.bind(i))
+		maps.add_child(map_btn)
+		sandbox_map_buttons.append(map_btn)
+	body.add_child(_sandbox_heading("Attackers"))
+	var attackers := [
+		["infantry", "Infantry", 4],
+		["technical", "Technical", 2],
+		["rpg", "RPG team", 1],
+		["tank", "Tank", 0],
+		["heli", "Helicopter", 0],
+	]
+	for spec in attackers:
+		var row := HBoxContainer.new()
+		var name := Label.new()
+		name.text = str(spec[1])
+		name.custom_minimum_size = Vector2(160, 0)
+		name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(name)
+		var spin := SpinBox.new()
+		spin.min_value = 0
+		spin.max_value = 30
+		spin.step = 1
+		spin.value = float(spec[2])
+		spin.rounded = true
+		spin.custom_minimum_size = Vector2(110, 0)
+		row.add_child(spin)
+		body.add_child(row)
+		sandbox_spins[str(spec[0])] = spin
+	body.add_child(_sandbox_heading("Difficulty"))
+	sandbox_diff_label = Label.new()
+	sandbox_diff_label.text = "Difficulty  100%"
+	body.add_child(sandbox_diff_label)
+	sandbox_diff = HSlider.new()
+	sandbox_diff.min_value = 50
+	sandbox_diff.max_value = 250
+	sandbox_diff.step = 5
+	sandbox_diff.value = 100
+	sandbox_diff.custom_minimum_size = Vector2(0, 22)
+	sandbox_diff.value_changed.connect(_on_setup_diff)
+	body.add_child(sandbox_diff)
+	var presets := HBoxContainer.new()
+	presets.add_theme_constant_override("separation", 8)
+	body.add_child(presets)
+	for preset in [["Easy", 60.0], ["Normal", 100.0], ["Hard", 150.0], ["Brutal", 220.0]]:
+		var preset_btn := Button.new()
+		preset_btn.text = str(preset[0])
+		preset_btn.custom_minimum_size = Vector2(110, 34)
+		preset_btn.pressed.connect(_set_setup_diff.bind(float(preset[1])))
+		presets.add_child(preset_btn)
+	sandbox_god = CheckBox.new()
+	sandbox_god.text = "God mode — the convoy cannot be hurt"
+	body.add_child(sandbox_god)
+	body.add_child(_sandbox_heading("Game speed"))
+	sandbox_speed_label = Label.new()
+	sandbox_speed_label.text = "Speed  1.00x"
+	body.add_child(sandbox_speed_label)
+	sandbox_speed = HSlider.new()
+	sandbox_speed.min_value = 25
+	sandbox_speed.max_value = 300
+	sandbox_speed.step = 5
+	sandbox_speed.value = 100
+	sandbox_speed.custom_minimum_size = Vector2(0, 22)
+	sandbox_speed.value_changed.connect(_on_setup_speed)
+	body.add_child(sandbox_speed)
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 8)
+	outer.add_child(actions)
+	actions.add_child(_button("Arm Column", sandbox_arm_pressed))
+	actions.add_child(_button("Back", back_pressed))
+	_build_sandbox_drive()
+
+
+func _build_sandbox_drive() -> void:
+	sandbox_drive = PanelContainer.new()
+	sandbox_drive.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	sandbox_drive.offset_left = 16
+	sandbox_drive.offset_top = 108
+	sandbox_drive.offset_right = 300
+	sandbox_drive.offset_bottom = 470
+	sandbox_drive.add_theme_stylebox_override("panel", _style(Color(0.07, 0.08, 0.06, 0.86), Color(0.55, 0.48, 0.28), 8))
+	root.add_child(sandbox_drive)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+	sandbox_drive.add_child(box)
+	var heading := Label.new()
+	heading.text = "SANDBOX"
+	heading.add_theme_color_override("font_color", Color("e2b84a"))
+	box.add_child(heading)
+	drive_god = CheckBox.new()
+	drive_god.text = "God mode"
+	drive_god.toggled.connect(_on_drive_god)
+	box.add_child(drive_god)
+	drive_diff_label = Label.new()
+	drive_diff_label.text = "Difficulty  100%"
+	box.add_child(drive_diff_label)
+	drive_diff = HSlider.new()
+	drive_diff.min_value = 50
+	drive_diff.max_value = 250
+	drive_diff.step = 5
+	drive_diff.value = 100
+	drive_diff.custom_minimum_size = Vector2(0, 18)
+	drive_diff.value_changed.connect(_on_drive_diff)
+	box.add_child(drive_diff)
+	drive_speed_label = Label.new()
+	drive_speed_label.text = "Speed  1.00x"
+	box.add_child(drive_speed_label)
+	drive_speed = HSlider.new()
+	drive_speed.min_value = 25
+	drive_speed.max_value = 300
+	drive_speed.step = 5
+	drive_speed.value = 100
+	drive_speed.custom_minimum_size = Vector2(0, 18)
+	drive_speed.value_changed.connect(_on_drive_speed)
+	box.add_child(drive_speed)
+	var spawn_label := Label.new()
+	spawn_label.text = "Spawn on left click"
+	box.add_child(spawn_label)
+	spawn_pick = OptionButton.new()
+	spawn_pick.add_item("Infantry")
+	spawn_pick.add_item("Technical")
+	spawn_pick.add_item("RPG team")
+	spawn_pick.add_item("Tank")
+	spawn_pick.add_item("Helicopter")
+	box.add_child(spawn_pick)
+	var restart := Button.new()
+	restart.text = "Restart Drive"
+	restart.pressed.connect(func() -> void:
+		if audio:
+			audio.play("ui_click", -4.0)
+		sandbox_restart_pressed.emit()
+	)
+	box.add_child(restart)
+
+
+func _sandbox_heading(text: String) -> Label:
+	var label := Label.new()
+	label.text = text.to_upper()
+	label.add_theme_color_override("font_color", Color("e2b84a"))
+	label.add_theme_font_size_override("font_size", 13)
+	return label
+
+
+func _mark_sandbox_map(index: int) -> void:
+	sandbox_map_index = index
+	for i in sandbox_map_buttons.size():
+		var btn: Button = sandbox_map_buttons[i]
+		if i == index:
+			btn.add_theme_stylebox_override("normal", _style(Color("3a3420"), Color("e2b84a"), 6))
+		else:
+			btn.add_theme_stylebox_override("normal", _style(Color("24281c"), Color("5a5340"), 6))
+
+
+func _set_setup_diff(value: float) -> void:
+	sandbox_diff.value = value
+
+
+func _on_setup_diff(value: float) -> void:
+	sandbox_diff_label.text = "Difficulty  %d%%" % int(value)
+	if sandbox_sync:
+		return
+	sandbox_sync = true
+	drive_diff.value = value
+	sandbox_sync = false
+	_refresh_sandbox_readout()
+	sandbox_threat_changed.emit(value / 100.0)
+
+
+func _on_setup_speed(value: float) -> void:
+	sandbox_speed_label.text = "Speed  %.2fx" % (value / 100.0)
+
+
+func _on_drive_god(on: bool) -> void:
+	if sandbox_sync:
+		return
+	sandbox_god.button_pressed = on
+	sandbox_god_toggled.emit(on)
+
+
+func _on_drive_diff(value: float) -> void:
+	if sandbox_sync:
+		return
+	sandbox_sync = true
+	sandbox_diff.value = value
+	sandbox_sync = false
+	sandbox_diff_label.text = "Difficulty  %d%%" % int(value)
+	drive_diff_label.text = "Difficulty  %d%%" % int(value)
+	sandbox_threat_changed.emit(value / 100.0)
+
+
+func _on_drive_speed(value: float) -> void:
+	if sandbox_sync:
+		return
+	sandbox_speed.value = value
+	sandbox_speed_label.text = "Speed  %.2fx" % (value / 100.0)
+	drive_speed_label.text = "Speed  %.2fx" % (value / 100.0)
+	sandbox_speed_changed.emit(value / 100.0)
+
+
+func _refresh_sandbox_readout() -> void:
+	sandbox_diff_label.text = "Difficulty  %d%%" % int(sandbox_diff.value)
+	sandbox_speed_label.text = "Speed  %.2fx" % (sandbox_speed.value / 100.0)
+	drive_diff_label.text = "Difficulty  %d%%" % int(drive_diff.value)
+	drive_speed_label.text = "Speed  %.2fx" % (drive_speed.value / 100.0)
+
+
 func _build_help() -> void:
 	help_box = PanelContainer.new()
 	help_box.set_anchors_preset(Control.PRESET_CENTER)
@@ -388,7 +882,7 @@ func _build_help() -> void:
 	box.add_child(title)
 	help_body = Label.new()
 	help_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	help_body.text = "Arm a column, then ride it to the drop.\n\nBuild\n1–6 pick a unit. Left click a numbered pad to place it. Right click clears a pad. Q fills a suggested column. Enter deploys.\nYou need at least one cargo truck. Mix escorts beside the cargo. Anti-air is for helicopters. The repair truck heals whoever is hurting, cargo first.\n\nDrive\nGuns fire on their own. Right-drag orbits the camera, the wheel zooms, F snaps back. A/D orbit, W/S zoom.\nQ smoke — hostiles miss more for a few seconds.\nE airstrike — a marker, then a blast on the densest group. It does not hit your trucks.\nR field repair — a burst of healing.\nEsc pauses.\n\nDeliver at least one cargo truck. Lose if they all die. Pay rolls into the next mission's budget."
+	help_body.text = "Arm a formation, then ride it to the drop.\n\nBuild\n1-9, 0, minus and equals pick a unit. Left click anywhere in the yard to place it. Drag a vehicle to move it. Right click removes it. R rotates. Q fills a suggested wedge. Enter deploys.\nThere is no lane cap. Wide lines and clusters keep their spacing while they drive.\nFuel stretches smoke and returns a charge. Engineers clear IEDs. Mortars splash. The escort helicopter flies with the column. Medevac heals. Bring at least one cargo truck.\n\nDrive\nGuns fire on their own. Press G, or click an armed vehicle, to take that gun. The column, including your vehicle, keeps driving. Mouse aims, left click fires, right click scopes. Tab changes gun, the wheel changes weapon on a tank, G leaves the seat.\nRight-drag orbits the camera, the wheel zooms, F snaps back. A/D orbit, W/S zoom.\nQ smoke — thick cover, hostiles miss more.\nE airstrike — a jet, then a blast on the densest group. It does not hit your trucks.\nR field repair — a burst of healing.\nEsc pauses.\n\nDeliver at least one cargo truck. Lose if they all die. Pay rolls into the next mission's budget.\n\nSandbox, from the main menu, gives an unlimited budget on any map. Choose the attackers, a difficulty, god mode, and the game speed. Left click spawns a hostile. Restart Drive runs the same column again. Sandbox does not change the campaign."
 	box.add_child(help_body)
 	box.add_child(_button("Back", back_pressed))
 
@@ -452,13 +946,18 @@ func _build_build() -> void:
 	build_bottom.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	build_bottom.offset_left = 12
 	build_bottom.offset_right = -12
-	build_bottom.offset_top = -168
+	build_bottom.offset_top = -188
 	build_bottom.offset_bottom = -12
 	build_bottom.add_theme_stylebox_override("panel", _style(Color(0.07, 0.08, 0.06, 0.9), Color(0.45, 0.4, 0.24), 8))
 	root.add_child(build_bottom)
+	var row_scroll := ScrollContainer.new()
+	row_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	row_scroll.custom_minimum_size = Vector2(900, 120)
+	build_bottom.add_child(row_scroll)
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	build_bottom.add_child(row)
+	row.add_theme_constant_override("separation", 6)
+	row_scroll.add_child(row)
 	for i in Defs.CARD_ORDER.size():
 		var kind: String = Defs.CARD_ORDER[i]
 		var spec: Dictionary = Defs.UNITS[kind]
@@ -466,7 +965,7 @@ func _build_build() -> void:
 		btn.text = "%d  %s\n$%d   HP %d   DMG %d\nRNG %d   SPD %d" % [
 			i + 1, spec["name"], spec["cost"], spec["hp"], int(spec["dmg"]), int(spec["rng"]), int(spec["spd"]),
 		]
-		btn.custom_minimum_size = Vector2(150, 92)
+		btn.custom_minimum_size = Vector2(128, 100)
 		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		btn.pressed.connect(_on_card.bind(kind))
 		row.add_child(btn)
@@ -478,6 +977,161 @@ func _build_build() -> void:
 	deploy_button = _button("Deploy", deploy_pressed)
 	side.add_child(deploy_button)
 	side.add_child(_button("Back", back_pressed))
+	_build_dock()
+
+
+func _build_dock() -> void:
+	build_dock = PanelContainer.new()
+	build_dock.set_anchors_preset(Control.PRESET_LEFT_WIDE)
+	build_dock.offset_left = 12
+	build_dock.offset_top = 118
+	build_dock.offset_right = 318
+	build_dock.offset_bottom = -180
+	build_dock.add_theme_stylebox_override("panel", _style(Color(0.07, 0.08, 0.06, 0.9), Color(0.45, 0.4, 0.24), 8))
+	root.add_child(build_dock)
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	build_dock.add_child(scroll)
+	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(280, 0)
+	box.add_theme_constant_override("separation", 6)
+	scroll.add_child(box)
+	box.add_child(_caption("CONVOY NAME"))
+	name_edit = LineEdit.new()
+	name_edit.placeholder_text = "Name the column"
+	name_edit.text = "Column One"
+	name_edit.focus_exited.connect(func() -> void: name_changed.emit(name_edit.text))
+	name_edit.text_submitted.connect(func(text: String) -> void: name_changed.emit(text))
+	box.add_child(name_edit)
+	box.add_child(_caption("CAMO"))
+	var camo_row := HBoxContainer.new()
+	camo_row.add_theme_constant_override("separation", 4)
+	box.add_child(camo_row)
+	for camo_name in Defs.CAMO_ORDER:
+		var spec: Dictionary = Defs.CAMOS[camo_name]
+		var swatch := Button.new()
+		swatch.text = str(spec["name"]).substr(0, 1)
+		swatch.tooltip_text = str(spec["name"])
+		swatch.custom_minimum_size = Vector2(36, 28)
+		var col: Color = spec["a"]
+		swatch.add_theme_stylebox_override("normal", _style(col, Color("2a2a24"), 4))
+		swatch.pressed.connect(camo_pressed.emit.bind(camo_name))
+		camo_row.add_child(swatch)
+		camo_buttons[camo_name] = swatch
+	box.add_child(_caption("SELECTED VEHICLE"))
+	upgrade_label = Label.new()
+	upgrade_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	upgrade_label.text = "Click a vehicle on the grid."
+	box.add_child(upgrade_label)
+	box.add_child(_upgrade_row("Armor", "armor"))
+	box.add_child(_upgrade_row("Weapon", "weapon"))
+	box.add_child(_upgrade_row("Speed", "speed"))
+	var tools := HBoxContainer.new()
+	tools.add_theme_constant_override("separation", 4)
+	box.add_child(tools)
+	tools.add_child(_emit_button("Rotate", rotate_pressed))
+	tools.add_child(_emit_button("Remove", remove_pressed))
+	box.add_child(_caption("FORMATION"))
+	var shapes := HBoxContainer.new()
+	shapes.add_theme_constant_override("separation", 4)
+	box.add_child(shapes)
+	for style in ["line", "wedge", "box"]:
+		var shape := Button.new()
+		shape.text = style.capitalize()
+		shape.pressed.connect(arrange_pressed.emit.bind(style))
+		shapes.add_child(shape)
+	box.add_child(_caption("PRESETS"))
+	preset_edit = LineEdit.new()
+	preset_edit.placeholder_text = "Preset name"
+	box.add_child(preset_edit)
+	preset_pick = OptionButton.new()
+	box.add_child(preset_pick)
+	var preset_row := HBoxContainer.new()
+	preset_row.add_theme_constant_override("separation", 4)
+	box.add_child(preset_row)
+	var save_b := Button.new()
+	save_b.text = "Save"
+	save_b.pressed.connect(func() -> void: preset_save.emit(preset_edit.text))
+	preset_row.add_child(save_b)
+	var load_b := Button.new()
+	load_b.text = "Load"
+	load_b.pressed.connect(func() -> void:
+		if preset_pick.item_count == 0:
+			return
+		preset_load.emit(preset_pick.get_item_text(preset_pick.selected))
+	)
+	preset_row.add_child(load_b)
+	var del_b := Button.new()
+	del_b.text = "Delete"
+	del_b.pressed.connect(func() -> void:
+		if preset_pick.item_count == 0:
+			return
+		preset_delete.emit(preset_pick.get_item_text(preset_pick.selected))
+	)
+	preset_row.add_child(del_b)
+
+
+func _sync_dock(state: Dictionary, units: Array) -> void:
+	var convoy := str(state.get("name", ""))
+	if name_edit and not name_edit.has_focus() and convoy != "":
+		name_edit.text = convoy
+	var camo := str(state.get("camo", "woodland"))
+	for key in camo_buttons:
+		var swatch: Button = camo_buttons[key]
+		var col: Color = Defs.CAMOS[key]["a"]
+		var border := Color("e2b84a") if key == camo else Color("2a2a24")
+		swatch.add_theme_stylebox_override("normal", _style(col, border, 4))
+	var selected := int(state.get("selected", -1))
+	if selected >= 0 and selected < units.size():
+		var unit: Dictionary = units[selected]
+		var spec: Dictionary = Defs.UNITS[str(unit["kind"])]
+		upgrade_label.text = "%s\nArmor %d   Weapon %d   Speed %d\nYaw %d°   lane %d   row %d" % [
+			spec["name"], int(unit["armor"]), int(unit["weapon"]), int(unit["speed"]),
+			int(unit["yaw"]), int(unit["lane"]) + 1, int(unit["row"]) + 1,
+		]
+	else:
+		upgrade_label.text = "Click a vehicle on the grid."
+	var names: Array = state.get("presets", [])
+	if preset_pick:
+		var current := preset_pick.get_item_text(preset_pick.selected) if preset_pick.item_count > 0 else ""
+		preset_pick.clear()
+		for preset_name in names:
+			preset_pick.add_item(str(preset_name))
+		for i in preset_pick.item_count:
+			if preset_pick.get_item_text(i) == current:
+				preset_pick.select(i)
+				break
+
+
+func _caption(text: String) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.add_theme_color_override("font_color", Color("e2b84a"))
+	label.add_theme_font_size_override("font_size", 12)
+	return label
+
+
+func _upgrade_row(title: String, stat: String) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	var label := Label.new()
+	label.text = title
+	label.custom_minimum_size = Vector2(70, 0)
+	row.add_child(label)
+	for level in 3:
+		var btn := Button.new()
+		btn.text = str(level)
+		btn.custom_minimum_size = Vector2(36, 0)
+		btn.pressed.connect(upgrade_pressed.emit.bind(stat, level))
+		row.add_child(btn)
+	return row
+
+
+func _emit_button(text: String, which: Signal) -> Button:
+	var btn := Button.new()
+	btn.text = text
+	btn.pressed.connect(func() -> void: which.emit())
+	return btn
 
 
 func _build_drive() -> void:
@@ -556,7 +1210,8 @@ func _build_pause() -> void:
 	title.add_theme_font_size_override("font_size", 28)
 	box.add_child(title)
 	box.add_child(_button("Resume", resume_pressed))
-	box.add_child(_button("Retry Mission", retry_pressed))
+	pause_retry = _button("Retry Mission", retry_pressed)
+	box.add_child(pause_retry)
 	box.add_child(_button("Main Menu", menu_pressed))
 
 
@@ -588,7 +1243,8 @@ func _build_results() -> void:
 	box.add_child(row)
 	result_next = _button("Next Mission", next_pressed)
 	row.add_child(result_next)
-	row.add_child(_button("Retry", retry_pressed))
+	result_retry = _button("Retry", retry_pressed)
+	row.add_child(result_retry)
 	row.add_child(_button("Menu", menu_pressed))
 
 

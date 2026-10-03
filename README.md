@@ -29,17 +29,20 @@ Download `ConvoyCommand-Windows-x64.zip` from the GitHub release (or from the pu
 
 ### Build phase
 
-An angled camera looks down the start of the route. Numbered pads are convoy slots. Slot 1 is the front.
+An angled camera looks down a wide yard at the start of the route. Place vehicles anywhere in that yard. The formation keeps that shape while it drives.
 
 - **1–6** select Cargo, Humvee, APC, Tank, Anti-Air, or Repair
-- **Left click** a pad to place the selected unit
-- **Right click** a pad to remove it
-- **Q** loads a suggested column you can still edit
+- **Left click** an empty cell to place the selected unit
+- **Left click** a vehicle to select it, then drag it to another cell
+- **Right click** removes a vehicle
+- **R** rotates the selected vehicle
+- **Q** loads a suggested wedge you can still edit
 - **Enter** deploys
+- The side panel names the convoy, picks camo, upgrades armor / weapon / speed, rearranges Line / Wedge / Box, and saves presets
 - **Right-drag** orbits the camera, **mouse wheel** zooms
 - **A / D** orbit, **W / S** zoom, **F** resets the camera
 
-You must bring at least one cargo truck, and the column has to fit the budget. Keep escorts next to the cargo. Anti-air is for helicopters. A repair truck patches the most damaged neighbor and prefers cargo. Do not put a cargo truck in front.
+You must bring at least one cargo truck, and the formation has to fit the budget. Flank the cargo or put guns ahead of it. Anti-air is for helicopters. A repair truck patches the most damaged neighbor and prefers cargo. Do not put a cargo truck in front of the guns.
 
 ### Drive phase
 
@@ -47,8 +50,8 @@ Friendly guns fire on their own. You run the camera and three support abilities.
 
 - **Right-drag** orbits, **mouse wheel** zooms, **F** snaps back behind the column
 - **A / D** orbit, **W / S** zoom
-- **Q** smoke — hostiles miss more for a few seconds
-- **E** airstrike — marks the densest group, then hits it. It does not damage your trucks
+- **Q** smoke — a thick drifting cloud; hostiles miss more for a few seconds
+- **E** airstrike — a jet lines up on the densest group, then hits it. It does not damage your trucks
 - **R** field repair — a burst of healing
 - **Esc** pause
 
@@ -91,6 +94,8 @@ Export (Godot 4.7.2 and the matching Windows export templates):
 ```bash
 tools/export_windows.sh
 ```
+
+Vehicle, soldier, and nature meshes include CC0 models from Kenney (see CREDITS). Tanks, APCs, and helicopters are authored triangle meshes with camo textures.
 
 Sound effects are generated, not recorded:
 
